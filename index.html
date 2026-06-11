@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1a1a2e">
+<title>ScadPad — OpenSCAD on the go</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="assets/icon-192.png">
+<link rel="apple-touch-icon" href="assets/icon-192.png">
+<link rel="stylesheet" href="css/app.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.js",
+    "three/addons/": "./vendor/three/"
+  }
+}
+</script>
+</head>
+<body>
+
+<header id="topbar">
+  <button id="menu-btn" class="icon-btn" title="Menu">&#9776;</button>
+  <button id="project-btn" class="title-btn" title="Projects">
+    <span id="project-name">untitled</span> <span class="caret">&#9662;</span>
+  </button>
+  <span id="render-status" class="status-idle" title="Render status"></span>
+  <button id="export-btn" class="action-btn" title="Export STL">STL &#11015;</button>
+</header>
+
+<main id="layout">
+  <section id="viewer-panel">
+    <canvas id="viewer-canvas"></canvas>
+    <div id="viewer-overlay"></div>
+    <button id="reset-view-btn" class="icon-btn overlay-btn" title="Reset view">&#8634;</button>
+  </section>
+
+  <section id="bottom-panel">
+    <nav id="panel-tabs">
+      <button class="tab active" data-tab="code-view">Code</button>
+      <button class="tab" data-tab="customizer-view">Customizer</button>
+      <button class="tab" data-tab="console-view">Console <span id="error-badge" hidden>!</span></button>
+    </nav>
+    <div id="code-view" class="tab-view active">
+      <textarea id="editor" spellcheck="false" autocapitalize="off" autocomplete="off"
+        autocorrect="off" placeholder="// OpenSCAD code&#10;cube(10);"></textarea>
+    </div>
+    <div id="customizer-view" class="tab-view">
+      <div id="customizer-form"><p class="hint">Render once to extract parameters.</p></div>
+    </div>
+    <div id="console-view" class="tab-view">
+      <pre id="log"></pre>
+    </div>
+  </section>
+</main>
+
+<!-- Main menu -->
+<dialog id="menu-dialog">
+  <h2>Menu</h2>
+  <nav class="menu-list">
+    <button id="menu-projects">&#128193; Projects…</button>
+    <button id="menu-libraries">&#128218; Libraries…</button>
+    <button id="menu-settings">&#9881; Settings…</button>
+    <button id="menu-sync">&#9729; Sync with Google Drive</button>
+  </nav>
+  <form method="dialog"><button class="close-btn">Close</button></form>
+</dialog>
+
+<!-- Projects -->
+<dialog id="projects-dialog">
+  <h2>Projects</h2>
+  <ul id="projects-list"></ul>
+  <div class="dialog-actions">
+    <button id="new-project-btn">+ New project</button>
+  </div>
+  <form method="dialog"><button class="close-btn">Close</button></form>
+</dialog>
+
+<!-- Libraries -->
+<dialog id="libraries-dialog">
+  <h2>Libraries</h2>
+  <p class="hint">Installed libraries are mounted so <code>include &lt;BOSL2/std.scad&gt;</code> works.</p>
+  <ul id="libraries-list"></ul>
+  <h3>Add from URL</h3>
+  <p class="hint">Zip URL must allow cross-origin requests (e.g. GitHub API zipball URLs).</p>
+  <div class="field-row">
+    <input id="lib-custom-name" type="text" placeholder="Name (folder)">
+    <input id="lib-custom-url" type="url" placeholder="https://…/library.zip">
+    <button id="lib-custom-add">Add</button>
+  </div>
+  <form method="dialog"><button class="close-btn">Close</button></form>
+</dialog>
+
+<!-- Settings -->
+<dialog id="settings-dialog">
+  <h2>Settings</h2>
+
+  <h3>Rendering</h3>
+  <label class="field">Renderer backend
+    <select id="set-backend">
+      <option value="manifold" selected>Manifold (fastest, experimental)</option>
+      <option value="cgal">CGAL (classic)</option>
+    </select>
+  </label>
+  <label class="field">Preview quality
+    <select id="set-quality">
+      <option value="draft">Draft ($fn=16)</option>
+      <option value="preview" selected>Preview ($fn=32)</option>
+      <option value="final">Final (model defaults)</option>
+      <option value="custom">Custom…</option>
+    </select>
+  </label>
+  <div id="custom-quality" class="field-row" hidden>
+    <label>$fn <input id="set-fn" type="number" min="0" step="1" value="0"></label>
+    <label>$fa <input id="set-fa" type="number" min="0.1" step="0.5" value="12"></label>
+    <label>$fs <input id="set-fs" type="number" min="0.01" step="0.5" value="2"></label>
+  </div>
+  <label class="field checkbox"><input id="set-final-export" type="checkbox" checked>
+    Use final quality for STL export</label>
+
+  <h3>Google Drive</h3>
+  <label class="field">OAuth Client ID
+    <input id="set-client-id" type="text" placeholder="xxxxx.apps.googleusercontent.com">
+  </label>
+  <p class="hint">Create a “Web application” OAuth client in Google Cloud Console and add this
+    page’s origin to its authorized JavaScript origins.</p>
+  <div class="field-row">
+    <button id="gdrive-signin">Sign in</button>
+    <button id="gdrive-signout" hidden>Sign out</button>
+    <span id="gdrive-status" class="hint"></span>
+  </div>
+
+  <h3>Storage</h3>
+  <p class="hint" id="storage-usage"></p>
+  <button id="clear-caches">Clear caches</button>
+
+  <form method="dialog"><button class="close-btn">Close</button></form>
+</dialog>
+
+<!-- Export destination -->
+<dialog id="export-dialog">
+  <h2>Export STL</h2>
+  <nav class="menu-list">
+    <button id="export-device">&#128190; Save to device</button>
+    <button id="export-drive">&#9729; Upload to Google Drive</button>
+  </nav>
+  <form method="dialog"><button class="close-btn">Cancel</button></form>
+</dialog>
+
+<div id="toast-container"></div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
