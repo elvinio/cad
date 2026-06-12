@@ -36,6 +36,28 @@ export function initUI() {
     document.getElementById('menu-dialog').showModal());
   open('menu-settings', 'settings-dialog');
 
+  // SW version display
+  const swVersionEl = document.getElementById('sw-version');
+  if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+    navigator.serviceWorker.addEventListener('message', (e) => {
+      if (e.data?.type === 'version') swVersionEl.textContent = e.data.version;
+    });
+    navigator.serviceWorker.controller.postMessage({ type: 'getVersion' });
+  }
+
+  // Refresh cache
+  document.getElementById('menu-refresh-cache').addEventListener('click', async () => {
+    document.getElementById('menu-dialog').close();
+    toast('Clearing cache…', 'info', 2000);
+    try {
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k => caches.delete(k)));
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r => r.unregister()));
+    } catch (_) { /* ignore */ }
+    location.reload();
+  });
+
   // Close dialogs when tapping the backdrop
   document.querySelectorAll('dialog').forEach(dialog => {
     dialog.addEventListener('click', (e) => {
