@@ -127,6 +127,15 @@ body {
   right: 6px; top: 6px;
   background: rgba(0,0,0,0.35);
 }
+#maximize-btn { top: 44px; }
+
+#viewer-panel.maximized {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  width: 100% !important;
+  height: 100% !important;
+}
 
 /* ---------- Bottom panel ---------- */
 #bottom-panel {
