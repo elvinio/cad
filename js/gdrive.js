@@ -7,7 +7,7 @@ import { importProject, getActiveProject } from './projects.js';
 import { toast } from './ui.js';
 
 const SCOPE = 'https://www.googleapis.com/auth/drive.file';
-const FOLDER_NAME = 'OpenSCAD-PWA';
+const FOLDER_NAME = 'cad';
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 const API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
@@ -82,21 +82,25 @@ async function driveFetch(url, options = {}) {
 async function findOrCreateFolder() {
   const settings = getSettings();
   if (settings.driveFolderId) {
-    // verify it still exists
+    // verify it still exists AND is the right folder (guard against stale IDs
+    // from a previous folder name like 'OpenSCAD-PWA')
     try {
-      await driveFetch(`${API}/files/${settings.driveFolderId}?fields=id`);
-      return settings.driveFolderId;
-    } catch { /* deleted remotely; recreate below */ }
+      const meta = await (await driveFetch(
+        `${API}/files/${settings.driveFolderId}?fields=id,name`)).json();
+      if (meta.name === FOLDER_NAME) return settings.driveFolderId;
+      // name mismatch — cached ID points to wrong folder; fall through
+    } catch { /* deleted remotely; fall through to search/create */ }
   }
+  // Search for existing 'cad' folder directly under root
   const q = encodeURIComponent(
-    `name='${FOLDER_NAME}' and mimeType='${FOLDER_MIME}' and trashed=false`);
+    `name='${FOLDER_NAME}' and mimeType='${FOLDER_MIME}' and 'root' in parents and trashed=false`);
   const found = await (await driveFetch(`${API}/files?q=${q}&fields=files(id)`)).json();
   let id = found.files && found.files[0] && found.files[0].id;
   if (!id) {
     const created = await (await driveFetch(`${API}/files`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: FOLDER_NAME, mimeType: FOLDER_MIME }),
+      body: JSON.stringify({ name: FOLDER_NAME, mimeType: FOLDER_MIME, parents: ['root'] }),
     })).json();
     id = created.id;
   }
@@ -146,6 +150,8 @@ export async function syncProjects() {
       const res = await uploadFile(`${project.name}.scad`,
         new Blob([project.code], { type: 'text/plain' }), folderId, rf.id);
       project.driveFileId = res.id;
+      // Align local timestamp to what Drive stored so next sync sees no drift
+      project.modified = Date.parse(res.modifiedTime);
       saveProjectRaw(project);
       pushed++;
     } else if (remoteMs > project.modified + 2000) {
@@ -171,6 +177,7 @@ export async function syncProjects() {
     const res = await uploadFile(`${project.name}.scad`,
       new Blob([project.code], { type: 'text/plain' }), folderId);
     project.driveFileId = res.id;
+    project.modified = Date.parse(res.modifiedTime);
     saveProjectRaw(project);
     pushed++;
   }

@@ -16,6 +16,7 @@ export function initSettings() {
   $('set-fs').value = settings.custom.fs;
   $('set-final-export').checked = settings.finalQualityExport;
   $('set-client-id').value = settings.googleClientId;
+  $('set-folder-id').value = settings.driveFolderId || '';
   $('custom-quality').hidden = settings.quality !== 'custom';
 
   const save = (patch) => {
@@ -41,6 +42,8 @@ export function initSettings() {
     save({ finalQualityExport: e.target.checked }));
   $('set-client-id').addEventListener('change', e =>
     save({ googleClientId: e.target.value.trim() }));
+  $('set-folder-id').addEventListener('change', e =>
+    save({ driveFolderId: e.target.value.trim() || null }));
 
   // ----- Google sign-in -----
   const updateAuthUi = () => {

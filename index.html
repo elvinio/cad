@@ -132,6 +132,11 @@
     <button id="gdrive-signout" hidden>Sign out</button>
     <span id="gdrive-status" class="hint"></span>
   </div>
+  <label class="field">Sync folder ID
+    <input id="set-folder-id" type="text" placeholder="auto (creates cad/ at Drive root)">
+  </label>
+  <p class="hint">Leave blank to auto-create the <code>cad</code> folder at your Drive root.
+    Paste a folder ID here to sync into a specific existing folder instead.</p>
 
   <h3>Storage</h3>
   <p class="hint" id="storage-usage"></p>
