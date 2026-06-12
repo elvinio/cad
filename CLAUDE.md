@@ -178,8 +178,11 @@ SW install still renders; quality switch re-renders.
 10. **Service worker**: `sw.js` precaches the shell with `cache.addAll` but the ~9.6MB
     `openscad.wasm` is cached with a tolerant separate `Promise.allSettled` so install
     never fails on slow networks; the cache-first fetch handler back-fills it on first
-    use. Bump `CACHE` version string when deploying changes. Only same-origin GETs are
-    intercepted (Google auth/API traffic must never be cached).
+    use. **Bump `CACHE` in `sw.js` on every commit that changes any app file** — if you
+    don't, users on the cached version will never see your changes. The version string
+    (`scadpad-v1`, `scadpad-v2`, …) is displayed in the Menu dialog so users can confirm
+    they're on the latest build. Only same-origin GETs are intercepted (Google auth/API
+    traffic must never be cached).
 
 11. **OpenSCAD wasm prints noise**: `Could not initialize localization` on every run —
     harmless, ignore it in logs/tests.
