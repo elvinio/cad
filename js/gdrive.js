@@ -13,6 +13,7 @@ const API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
 
 let tokenClient = null;
+let tokenClientId = '';   // client ID that tokenClient was built with
 let accessToken = null;
 let tokenExpiry = 0;
 
@@ -35,12 +36,13 @@ export async function signIn() {
   const { googleClientId } = getSettings();
   if (!googleClientId) throw new Error('Set your Google OAuth Client ID in Settings first');
   await loadGis();
-  if (!tokenClient) {
+  if (!tokenClient || tokenClientId !== googleClientId) {
     tokenClient = google.accounts.oauth2.initTokenClient({
       client_id: googleClientId,
       scope: SCOPE,
       callback: () => {},
     });
+    tokenClientId = googleClientId;
   }
   return new Promise((resolve, reject) => {
     tokenClient.callback = (resp) => {
@@ -59,6 +61,8 @@ export function signOut() {
   }
   accessToken = null;
   tokenExpiry = 0;
+  tokenClient = null;
+  tokenClientId = '';
 }
 
 async function ensureToken() {
