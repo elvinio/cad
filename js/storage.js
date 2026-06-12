@@ -10,6 +10,7 @@ export const DEFAULT_SETTINGS = {
   quality: 'preview',
   custom: { fn: 0, fa: 12, fs: 2 },
   finalQualityExport: true,
+  modelColor: '#f9d72c',
   installedLibs: [],
   activeProjectId: null,
   driveFolderId: null,

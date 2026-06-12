@@ -319,6 +319,28 @@ dialog h3 { margin: 18px 0 8px; font-size: 14px; color: var(--muted); }
 #libraries-list .lib-name { flex: 1; font-size: 14px; }
 #libraries-list .lib-size { font-size: 11px; color: var(--muted); }
 
+/* ---------- Color swatches ---------- */
+.color-swatches {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 2px 0 6px;
+}
+.color-swatch {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  touch-action: manipulation;
+  outline: none;
+  box-shadow: 0 0 0 2px transparent;
+  transition: box-shadow 0.15s;
+}
+.color-swatch.active {
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--fg);
+}
+
 /* ---------- Toasts ---------- */
 #toast-container {
   position: fixed;

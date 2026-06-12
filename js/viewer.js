@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/OrbitControls.js';
 import { subscribe } from './state.js';
+import { getSettings } from './storage.js';
 
 let renderer, scene, camera, controls, mesh, grid;
 let firstFit = true;
@@ -48,6 +49,11 @@ export function initViewer(canvas) {
   subscribe('render:done', ({ offText }) => {
     if (offText) setGeometry(parseOFF(offText));
   });
+  subscribe('settings:changed', ({ settings }) => {
+    if (mesh && !mesh.material.vertexColors) {
+      mesh.material.color.set(settings.modelColor || '#f9d72c');
+    }
+  });
 }
 
 function resize(panel) {
@@ -64,8 +70,9 @@ function setGeometry(geometry) {
     mesh.geometry.dispose();
     mesh.material.dispose();
   }
+  const { modelColor } = getSettings();
   const material = new THREE.MeshStandardMaterial({
-    color: 0xf9d72c,
+    color: modelColor || '#f9d72c',
     flatShading: true,
     side: THREE.DoubleSide,
     vertexColors: geometry.hasAttribute('color'),
