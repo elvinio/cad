@@ -1,5 +1,15 @@
 // Settings dialog: rendering quality/backend, Google Client ID, storage info.
 
+export const COLOR_PRESETS = [
+  { label: 'Yellow',  hex: '#f9d72c' },
+  { label: 'Silver',  hex: '#c8c8d0' },
+  { label: 'Blue',    hex: '#4090e8' },
+  { label: 'Orange',  hex: '#e87040' },
+  { label: 'Green',   hex: '#3ab060' },
+  { label: 'Red',     hex: '#e04050' },
+  { label: 'White',   hex: '#f0f0ef' },
+];
+
 import { getSettings, saveSettings, clearLibZips } from './storage.js';
 import { emit } from './state.js';
 import { signIn, signOut, isSignedIn } from './gdrive.js';
@@ -85,5 +95,21 @@ export function initSettings() {
     }
     toast('Caches cleared — reload to re-download');
     refreshUsage();
+  });
+
+  // ----- Color swatches (in menu dialog) -----
+  const swatchContainer = document.getElementById('color-swatches');
+  COLOR_PRESETS.forEach(({ label, hex }) => {
+    const btn = document.createElement('button');
+    btn.className = 'color-swatch';
+    btn.style.background = hex;
+    btn.title = label;
+    if (hex === settings.modelColor) btn.classList.add('active');
+    btn.addEventListener('click', () => {
+      save({ modelColor: hex });
+      swatchContainer.querySelectorAll('.color-swatch')
+        .forEach(s => s.classList.toggle('active', s === btn));
+    });
+    swatchContainer.appendChild(btn);
   });
 }

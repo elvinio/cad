@@ -34,6 +34,7 @@
     <canvas id="viewer-canvas"></canvas>
     <div id="viewer-overlay"></div>
     <button id="reset-view-btn" class="icon-btn overlay-btn" title="Reset view">&#8634;</button>
+    <button id="maximize-btn" class="icon-btn overlay-btn" title="Maximize viewer">&#x26F6;</button>
   </section>
 
   <section id="bottom-panel">
@@ -65,6 +66,10 @@
     <button id="menu-sync">&#9729; Sync with Google Drive</button>
     <button id="menu-refresh-cache">&#8635; Refresh cache</button>
   </nav>
+  <div class="menu-color-section">
+    <p class="hint" style="margin:12px 0 6px">Model color</p>
+    <div id="color-swatches" class="color-swatches"></div>
+  </div>
   <p class="hint" id="sw-version"></p>
   <form method="dialog"><button class="close-btn">Close</button></form>
 </dialog>

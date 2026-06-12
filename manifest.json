@@ -4,7 +4,7 @@
   "description": "Parametric CAD modeling with OpenSCAD, in your pocket.",
   "start_url": ".",
   "display": "standalone",
-  "orientation": "any",
+  "orientation": "natural",
   "background_color": "#1a1a2e",
   "theme_color": "#1a1a2e",
   "icons": [

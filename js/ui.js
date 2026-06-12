@@ -65,6 +65,19 @@ export function initUI() {
     });
   });
 
+  // ----- Viewer maximize -----
+  const viewerPanel = document.getElementById('viewer-panel');
+  const maximizeBtn = document.getElementById('maximize-btn');
+  const setMaximized = (on) => {
+    viewerPanel.classList.toggle('maximized', on);
+    maximizeBtn.innerHTML = on ? '&#x2715;' : '&#x26F6;';
+    maximizeBtn.title = on ? 'Restore viewer' : 'Maximize viewer';
+  };
+  maximizeBtn.addEventListener('click', () => setMaximized(!viewerPanel.classList.contains('maximized')));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && viewerPanel.classList.contains('maximized')) setMaximized(false);
+  });
+
   // ----- Console log + status -----
   const log = document.getElementById('log');
   const status = document.getElementById('render-status');
