@@ -5,6 +5,7 @@
 //   params:changed    {}                   a customizer value changed
 //   render:start      {}
 //   render:done       {offText, elapsedMs}
+//   render:highlight  {offText}             `#`-highlighted geometry overlay (optional, follows render:done)
 //   render:error      {message}
 //   settings:changed  {settings}
 //   libs:changed      {}
