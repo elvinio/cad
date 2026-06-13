@@ -2,7 +2,7 @@
 
 import { subscribe } from './state.js';
 import { initUI, toast } from './ui.js';
-import { initViewer, fitView, setView } from './viewer.js';
+import { initViewer, fitView, setView, cycleDisplayMode } from './viewer.js';
 import { initEditor, getCode, setCode, clearHistory, canUndo, canRedo, undo, redo, insertText } from './editor.js';
 import { initCustomizer, getParamValues, setParamValues } from './customizer.js';
 import { initProjects, loadInitialProject, renderList as renderProjects,
@@ -91,6 +91,10 @@ async function boot() {
   $('view-presets').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-view]');
     if (btn) setView(btn.dataset.view);
+  });
+  $('display-mode-btn').addEventListener('click', (e) => {
+    const mode = cycleDisplayMode();
+    e.currentTarget.textContent = mode[0].toUpperCase() + mode.slice(1);
   });
 
   // Wiring: edits and settings changes trigger renders
