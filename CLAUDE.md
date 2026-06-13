@@ -23,7 +23,7 @@ js/state.js        tiny pub/sub bus — ALL cross-module communication goes thro
 js/storage.js      localStorage (projects, settings) + IndexedDB (library zip bytes)
 js/render-manager.js  debounce, one-in-flight queue, cancel-by-terminate, CGAL fallback
 js/worker/openscad-worker.js  module worker: owns wasm instance, mounts libs, runs CLI
-js/viewer.js       Three.js scene + OrbitControls + hand-written OFF parser
+js/viewer.js       Three.js scene + OrbitControls + hand-written OFF parser + display-mode toggle
 js/editor.js       plain <textarea>: Tab/Enter handling, Ctrl+S, autosave via onChange
 js/customizer.js   ParameterSet JSON -> form controls -> override values
 js/projects.js     project CRUD dialog + active-project lifecycle
@@ -213,3 +213,8 @@ SW install still renders; quality switch re-renders.
 - SW update UX: no "new version available" toast yet; users must reload twice.
 - Library picker re-downloads curated zips after "Clear caches" on next use
   (`ensureInstalledLibsCached()` runs at boot).
+- Viewport display-mode toggle (`#display-mode-btn`, beside the view presets)
+  cycles the model material solid → wireframe → ghost (translucent) via
+  `cycleDisplayMode()` in `js/viewer.js`. The mode is module-level state
+  re-applied by `applyDisplayMode()` inside `setGeometry()` so it survives
+  re-renders, but it is NOT persisted to settings (resets to solid on reload).
