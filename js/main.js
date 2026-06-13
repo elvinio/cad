@@ -13,6 +13,7 @@ import { initExport } from './export.js';
 import { initSettings } from './settings.js';
 import { syncProjects } from './gdrive.js';
 import { initDocs } from './docs.js';
+import { initChat } from './chat.js';
 
 const $ = id => document.getElementById(id);
 
@@ -39,6 +40,7 @@ async function boot() {
   });
   initSettings();
   initDocs();
+  initChat();
   initRenderManager({ getCode, getParamValues });
   initExport({
     exportBtn: $('export-btn'),
