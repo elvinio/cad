@@ -32,7 +32,7 @@ js/export.js       STL render -> showSaveFilePicker / <a download> / Drive uploa
 js/gdrive.js       Google Identity Services token client + Drive REST v3 + sync
 js/settings.js     settings dialog (backend, quality, Client ID, Anthropic key, storage)
 js/ui.js           tabs, dialogs, toasts, console log panel, status dot
-js/chat.js         AI Chat tab: Anthropic SDK (lazy-imported), streams replies, applies code
+js/chat.js         AI Chat tab: Anthropic SDK (lazy-imported), streams replies, agentic tool loop
 sw.js              service worker: cache-first app shell, tolerant wasm precache
 vendor/openscad/   openscad.js + openscad.wasm (see "Provenance" below)
 vendor/three/      three.module.js, three.core.js, OrbitControls.js, STLLoader.js
@@ -73,6 +73,42 @@ job arrives while one is in flight. The worker reads library zips from IndexedDB
 "/libraries"` is set before `callMain`; `FS.chdir('/')` so fonts resolve at `$(cwd)/fonts`.
 GitHub archive zips have a `Repo-ref/` top folder — `stripTopFolder()` removes it; the
 curated zips (from openscad-playground's npm dist) have files at the zip root.
+
+### Chat tool loop (js/chat.js + js/viewer.js)
+
+The AI chat is an **agentic loop**: each turn the model may call tools, whose
+results are fed back as `tool_result` blocks until it stops with text (capped by
+the `chatMaxTurns` setting; the Send button doubles as Stop). **Rendering and
+seeing are two separate tools** — so confirming "did it compile?" costs no image
+tokens, and the model chooses what angle to inspect:
+
+- **`apply_and_render(code)`** → replaces the editor with the COMPLETE file, drives
+  the normal render pipeline (`applyAndAwaitRender` waits on `render:done` /
+  `render:error`, 90s timeout), and returns **text only**: the bounding box +
+  triangle count, or the compiler error. No image.
+- **`look({view, azimuth, elevation})`** → renders the *current* model off-screen to
+  an image. `view:"grid"` (default) is the 2×2 ISO/FRONT/RIGHT/TOP composite
+  (`captureMultiView`); a named preset or `view:"custom"` with az/el degrees is a
+  single view (`captureView`). Returns text + an `image` block, and shows the same
+  image as a clickable button in the transcript.
+
+Viewer capture surface (all save the user's live camera and restore it — see the
+gimbal-lock gotcha): `withFramedCapture(body)` is the shared save/render/restore
+wrapper; `captureView()` and `captureMultiView()` both run inside it; `drawLabel()`
+bakes the view name into each cell. `getMeshStats()` → `{triangles, size:[dx,dy,dz]}`
+backs the dimension lines (null when nothing is rendered → `look` says so instead of
+attaching an image). There is **no** single-current-camera `captureSnapshot` anymore.
+
+**First-turn image**: `send()` attaches a starting 2×2 grid (`captureMultiView`) to
+the outgoing user turn, gated on `code !== lastCodeSeenByModel` (first message of a
+session, and after manual edits — same condition as the `<current_code>` prepend)
+**and** the 📷 `chatSendSnapshot` toggle. History is text-only; only the latest user
+turn carries an image, so old renders don't accumulate input-token cost.
+
+**Azimuth/elevation convention** (must match `VIEW_DIRECTIONS` so named and custom
+views agree): azimuth = degrees around +Z from +X, CCW — 0=+X (right), 90=+Y (back),
+−90=−Y (front); elevation = degrees above the XY plane — 90=straight down (top).
+Custom defaults are az 0 / el 20; an unknown `view` enum falls back to `iso`.
 
 ## Provenance of vendored assets
 
@@ -204,6 +240,18 @@ SW install still renders; quality switch re-renders.
     (`js/gdrive.js syncProjects`). `saveProjectRaw()` exists specifically to write a
     project WITHOUT restamping `modified` (needed when applying remote modifiedTime).
     Deletions do not propagate (v1 design decision).
+
+13. **Gimbal-lock up-vector swap in capture framing** (`frameFrom` callers in
+    `js/viewer.js`): the scene is **Z-up** (`camera.up = (0,0,1)`), so a camera looking
+    straight down or up the Z axis (top/bottom views, or a `look` custom elevation near
+    ±90°) has its view direction *parallel* to `up`. The cross product the look-at math
+    needs to build the camera basis (right = up × forward) then collapses to zero — the
+    horizontal axis is undefined and the orientation flips/spins unpredictably (classic
+    gimbal lock). The fix is to swap `up` to **+Y** `(0,1,0)` for exactly those views so
+    forward and up are no longer collinear. `setView`, `captureMultiView`, and
+    `captureView` all apply the same rule: `(view==='top'||view==='bottom')` → +Y up, and
+    `captureView`'s custom path uses `Math.abs(elevation) > 80` as the threshold. Keep the
+    three in sync — a named `top` and a `custom el:90` must frame identically.
 
 ## Known limitations / nice-to-haves
 
