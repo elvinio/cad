@@ -129,6 +129,25 @@ body {
 #reset-view-btn { left: 6px; top: 6px; }
 #maximize-btn   { right: 6px; top: 6px; }
 
+.view-presets {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  display: flex;
+  gap: 4px;
+}
+.view-presets button {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font-size: 11px;
+  padding: 4px 7px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.view-presets button:active { background: var(--accent); color: #1a1a2e; }
+
 #viewer-panel.maximized {
   position: fixed;
   inset: 0;
@@ -232,15 +251,47 @@ body {
 .key-bar .key-btn:last-child { border-right: none; }
 .key-bar .key-btn:active { background: var(--border); }
 
-#code-view #editor {
+.editor-wrap {
   flex: 1;
-  height: auto;
+  display: flex;
   min-height: 0;
+  overflow: hidden;
+  background: var(--panel-alt);
+}
+
+/* Gutter line metrics MUST match #editor exactly (font, size, line-height,
+   vertical padding) or the numbers drift away from the code lines. */
+.editor-gutter {
+  flex: none;
+  overflow: hidden; /* scrolled programmatically in lockstep with the textarea */
+  box-sizing: border-box;
+  padding: 10px 6px 10px 8px;
+  text-align: right;
+  background: var(--panel-alt);
+  border-right: 1px solid var(--border);
+  color: var(--muted);
+  font-family: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+  font-size: 14px;
+  line-height: 1.45;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.gutter-row {
+  min-width: 1.6em;
+  padding: 0 2px;
+}
+.gutter-row.err {
+  color: var(--error);
+  font-weight: 700;
+  cursor: pointer;
+  background: rgba(255, 92, 92, 0.15);
 }
 
 #editor {
+  flex: 1;
   width: 100%;
   height: 100%;
+  min-width: 0;
   resize: none;
   border: none;
   outline: none;
@@ -251,6 +302,8 @@ body {
   line-height: 1.45;
   tab-size: 2;
   padding: 10px 12px;
+  white-space: pre;
+  overflow: auto;
   -webkit-text-size-adjust: 100%;
 }
 
@@ -595,6 +648,26 @@ dialog h3 { margin: 18px 0 8px; font-size: 14px; color: var(--muted); }
   font-size: 12px;
   white-space: pre;
 }
+/* Apply-confirm diff view */
+#chat-apply-diff.diff {
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  margin: 0 0 4px;
+  max-height: 55dvh;
+  overflow: auto;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre;
+  tab-size: 2;
+}
+#chat-apply-diff .diff-add { color: var(--ok); display: block; }
+#chat-apply-diff .diff-del { color: var(--error); display: block; }
+#chat-apply-diff .diff-context { color: var(--muted); display: block; }
+.dialog-actions button.primary { background: var(--accent); color: #1a1a2e; font-weight: 600; }
+
 .chat-snapshot-tag { display: block; margin-top: 4px; font-size: 11px; color: var(--muted); }
 .chat-note { align-self: center; margin: 6px 0; font-size: 12px; color: var(--muted); text-align: center; }
 .chat-note.error { color: var(--error); }

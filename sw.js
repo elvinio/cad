@@ -1,6 +1,6 @@
 // Service worker: offline-first app shell with cache-first strategy.
 
-const CACHE = 'scadpad-v10';
+const CACHE = 'scadpad-v11';
 
 const SHELL = [
   '.',
@@ -23,6 +23,7 @@ const SHELL = [
   'js/worker/openscad-worker.js',
   'js/docs.js',
   'js/chat.js',
+  'js/util/linediff.js',
   'vendor/three/three.module.js',
   'vendor/three/three.core.js',
   'vendor/three/OrbitControls.js',

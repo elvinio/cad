@@ -8,6 +8,7 @@
 //   render:error      {message}
 //   settings:changed  {settings}
 //   libs:changed      {}
+//   viewer:stats      {triangles, size:[dx,dy,dz]}  mesh updated in the viewer
 
 const listeners = new Map();
 

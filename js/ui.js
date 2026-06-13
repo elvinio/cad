@@ -1,7 +1,7 @@
 // Tabs, dialogs, toasts, console log panel, render status indicator.
 
 import { subscribe } from './state.js';
-import { jumpToLine } from './editor.js';
+import { jumpToLine, setErrorLines, clearErrorLines } from './editor.js';
 
 export function toast(message, kind = 'info', ms = 3500) {
   const container = document.getElementById('toast-container');
@@ -105,21 +105,48 @@ export function initUI() {
     log.parentElement.scrollTop = log.parentElement.scrollHeight;
   };
 
+  // Error line numbers collected from the current render's log, surfaced as
+  // gutter markers in the editor.
+  let errorLineNos = [];
+
   subscribe('render:start', () => {
     status.className = 'status-busy';
     log.textContent = '';
+    errorLineNos = [];
+    clearErrorLines();
   });
   subscribe('render:log', ({ stream, line }) => {
     const isErr = stream === 'err' && /^ERROR|^WARNING/i.test(line);
     appendLog(line, isErr);
-    if (stream === 'err' && /^ERROR/i.test(line)) badge.hidden = false;
+    if (stream === 'err' && /^ERROR/i.test(line)) {
+      badge.hidden = false;
+      const m = line.match(/line (\d+)/);
+      if (m) {
+        errorLineNos.push(parseInt(m[1], 10));
+        setErrorLines(errorLineNos);
+      }
+    }
   });
+  // Overlay text is composed from two sources: the render time (render:done)
+  // and the model dimensions (viewer:stats, emitted after the mesh is set).
+  let overlayTime = '';
+  let overlayDims = '';
+  const renderOverlay = () => {
+    overlay.textContent = [overlayTime, overlayDims].filter(Boolean).join(' · ');
+  };
   subscribe('render:done', ({ elapsedMs }) => {
     status.className = 'status-ok';
     badge.hidden = true;
     if (elapsedMs !== undefined) {
-      overlay.textContent = `rendered in ${(elapsedMs / 1000).toFixed(1)}s`;
+      overlayTime = `rendered in ${(elapsedMs / 1000).toFixed(1)}s`;
+      renderOverlay();
     }
+  });
+  subscribe('viewer:stats', ({ size }) => {
+    overlayDims = size
+      ? `${size.map(n => +n.toFixed(2)).join(' × ')} mm`
+      : '';
+    renderOverlay();
   });
   subscribe('render:error', ({ message }) => {
     status.className = 'status-error';

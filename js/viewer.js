@@ -2,11 +2,12 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/OrbitControls.js';
-import { subscribe } from './state.js';
+import { subscribe, emit } from './state.js';
 import { getSettings } from './storage.js';
 
 let renderer, scene, camera, controls, mesh, grid;
 let firstFit = true;
+let meshStats = null; // { triangles, size:[dx,dy,dz] } for the current mesh
 
 export function initViewer(canvas) {
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -80,25 +81,66 @@ function setGeometry(geometry) {
   });
   mesh = new THREE.Mesh(geometry, material);
   scene.add(mesh);
+
+  // Compute stats here (the viewer owns the geometry); emit so the overlay can
+  // show dimensions without depending on cross-listener ordering at render:done.
+  geometry.computeBoundingBox();
+  const s = new THREE.Vector3();
+  geometry.boundingBox.getSize(s);
+  const round = v => Math.round(v * 100) / 100;
+  meshStats = {
+    triangles: geometry.getAttribute('position').count / 3,
+    size: [round(s.x), round(s.y), round(s.z)],
+  };
+  emit('viewer:stats', meshStats);
+
   if (firstFit) {
     fitView();
     firstFit = false;
   }
 }
 
-export function fitView() {
+// Direction vectors for the named camera presets (in OpenSCAD's Z-up frame).
+const VIEW_DIRECTIONS = {
+  iso:    [1, -1, 0.8],
+  front:  [0, -1, 0],
+  back:   [0, 1, 0],
+  right:  [1, 0, 0],
+  left:   [-1, 0, 0],
+  top:    [0, 0, 1],
+  bottom: [0, 0, -1],
+};
+
+// Shared framing: point the camera at the model's bounding sphere from dirVec,
+// keeping the model centred and fit. `up` is configurable because looking
+// straight down/up the Z axis (top/bottom) would be gimbal-locked with Z-up.
+function frameFrom(dirVec, up) {
   if (!mesh) return;
   mesh.geometry.computeBoundingSphere();
   const { center, radius } = mesh.geometry.boundingSphere;
   const r = Math.max(radius, 1);
   controls.target.copy(center);
-  const dirVec = new THREE.Vector3(1, -1, 0.8).normalize();
-  camera.position.copy(center).addScaledVector(dirVec, r * 2.4);
+  camera.up.copy(up);
+  camera.position.copy(center).addScaledVector(dirVec.clone().normalize(), r * 2.4);
   camera.near = r / 100;
   camera.far = r * 100;
   camera.updateProjectionMatrix();
   grid.scale.setScalar(Math.max(r / 100, 0.2));
   controls.update();
+}
+
+export function fitView() {
+  frameFrom(new THREE.Vector3(1, -1, 0.8), new THREE.Vector3(0, 0, 1));
+}
+
+// Frame the model from a named preset: front|back|left|right|top|bottom|iso.
+export function setView(name) {
+  const v = VIEW_DIRECTIONS[name];
+  if (!v || !mesh) return;
+  const up = (name === 'top' || name === 'bottom')
+    ? new THREE.Vector3(0, 1, 0)
+    : new THREE.Vector3(0, 0, 1);
+  frameFrom(new THREE.Vector3(v[0], v[1], v[2]), up);
 }
 
 // JPEG snapshot of the current view for the AI chat (base64, no data: prefix).
@@ -118,8 +160,7 @@ export function captureSnapshot(maxDim = 768) {
 }
 
 export function getMeshStats() {
-  if (!mesh) return null;
-  return { triangles: mesh.geometry.getAttribute('position').count / 3 };
+  return mesh ? meshStats : null;
 }
 
 // ---------- OFF parser ----------
