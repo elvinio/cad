@@ -1,6 +1,6 @@
 // Service worker: offline-first app shell with cache-first strategy.
 
-const CACHE = 'scadpad-v6';
+const CACHE = 'scadpad-v7';
 
 const SHELL = [
   '.',
