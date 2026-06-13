@@ -214,6 +214,75 @@ export function captureSnapshot(maxDim = 768) {
   return { mediaType: 'image/jpeg', data: dataUrl.slice(dataUrl.indexOf(',') + 1) };
 }
 
+// Views composited into the multi-view capture, in 2×2 grid order.
+const MULTIVIEW_VIEWS = ['iso', 'front', 'right', 'top'];
+
+// Composite snapshot for the AI chat: four labelled views (iso/front/right/top)
+// in a 2×2 grid so the model can judge geometry without depth ambiguity. The
+// user's live camera is saved and restored, so this never disturbs their view.
+// Returns { mediaType, data } like captureSnapshot (base64, no data: prefix),
+// plus `views` (the labels, in grid order) for callers that describe it.
+export function captureMultiView(maxDim = 1024) {
+  if (!mesh || !renderer) return null;
+
+  const saved = {
+    pos: camera.position.clone(),
+    up: camera.up.clone(),
+    target: controls.target.clone(),
+    near: camera.near, far: camera.far,
+    gridScale: grid.scale.x,
+  };
+
+  const src = renderer.domElement;
+  // Each cell is half the output edge; fit the (square-ish) canvas into it.
+  const cellScale = Math.min(1, (maxDim / 2) / Math.max(src.width, src.height));
+  const cellW = Math.max(1, Math.round(src.width * cellScale));
+  const cellH = Math.max(1, Math.round(src.height * cellScale));
+  const out = document.createElement('canvas');
+  out.width = cellW * 2;
+  out.height = cellH * 2;
+  const ctx = out.getContext('2d');
+  ctx.fillStyle = '#0f1830';
+  ctx.fillRect(0, 0, out.width, out.height);
+
+  MULTIVIEW_VIEWS.forEach((name, idx) => {
+    const v = VIEW_DIRECTIONS[name];
+    const up = (name === 'top' || name === 'bottom')
+      ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
+    frameFrom(new THREE.Vector3(v[0], v[1], v[2]), up);
+    renderer.render(scene, camera);
+    const x = (idx % 2) * cellW, y = ((idx / 2) | 0) * cellH;
+    ctx.drawImage(src, x, y, cellW, cellH);
+    // Bake the view label into the image so orientation can't desync from text.
+    ctx.font = '600 14px system-ui, sans-serif';
+    const label = name.toUpperCase();
+    const tw = ctx.measureText(label).width;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(x + 4, y + 4, tw + 10, 20);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(label, x + 9, y + 18);
+  });
+
+  // Restore the user's framing; OrbitControls.update() rebuilds orientation
+  // from position + target + up.
+  camera.position.copy(saved.pos);
+  camera.up.copy(saved.up);
+  camera.near = saved.near;
+  camera.far = saved.far;
+  camera.updateProjectionMatrix();
+  controls.target.copy(saved.target);
+  grid.scale.setScalar(saved.gridScale);
+  controls.update();
+  renderer.render(scene, camera);
+
+  const dataUrl = out.toDataURL('image/jpeg', 0.8);
+  return {
+    mediaType: 'image/jpeg',
+    data: dataUrl.slice(dataUrl.indexOf(',') + 1),
+    views: MULTIVIEW_VIEWS.slice(),
+  };
+}
+
 export function getMeshStats() {
   return mesh ? meshStats : null;
 }

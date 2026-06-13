@@ -102,6 +102,14 @@
         <label class="chat-toggle" title="Attach a snapshot of the rendered model to each message">
           <input id="chat-snapshot" type="checkbox" checked> &#128247;
         </label>
+        <select id="chat-max-turns" title="Max apply-and-render steps before the loop stops on its own">
+          <option value="1">1 turn</option>
+          <option value="3">3 turns</option>
+          <option value="5">5 turns</option>
+          <option value="10" selected>10 turns</option>
+          <option value="15">15 turns</option>
+          <option value="20">20 turns</option>
+        </select>
         <button id="chat-preview-btn" class="icon-btn" title="Preview the image that will be sent">&#128269;</button>
         <button id="chat-history-btn" class="icon-btn" title="Chat history for this project">&#128336;</button>
       </div>
@@ -221,17 +229,16 @@
   <p class="hint">Stored only in this app's local storage on this device — other sites cannot
     read it. Requests go directly from your browser to api.anthropic.com.</p>
 
-  <p class="hint">The model and the snapshot toggle now live on the Chat panel toolbar.</p>
-
-  <label class="field checkbox"><input id="chat-set-auto-apply" type="checkbox">
-    Auto-apply code from Claude (skip the review dialog)</label>
-  <p class="hint">Off by default: you review a diff and tap Apply before the editor is overwritten.</p>
+  <p class="hint">The model, snapshot toggle and turn limit now live on the Chat panel toolbar.
+    Claude edits the model by calling a tool that applies the code and renders it, then
+    inspects the result and iterates — the turn limit caps how many of these steps it may take.</p>
 
   <label class="field">Max tokens per reply
     <input id="chat-set-max-tokens" type="number" min="256" max="16000" step="256" value="4096">
   </label>
-  <p class="hint">Each message you send makes exactly one API call, so this hard-caps the spend
-    per reply. A reply that hits the cap is cut off — you'll see a warning in the chat.</p>
+  <p class="hint">Caps each model reply. One request can span several replies (one per
+    apply-and-render step), bounded by the turn limit. A reply that hits this cap is cut
+    off — you'll see a warning in the chat.</p>
 
   <label class="field">System prompt
     <textarea id="chat-set-system" rows="12" spellcheck="false"></textarea>
@@ -255,17 +262,6 @@
     <button id="chat-preview-copy">&#128203; Copy to clipboard</button>
   </div>
   <form method="dialog"><button class="close-btn">Close</button></form>
-</dialog>
-
-<!-- Review code from Claude before applying -->
-<dialog id="chat-apply-dialog">
-  <h2>Apply code from Claude?</h2>
-  <p class="hint">Review the changes below. Applying replaces your editor contents and re-renders.</p>
-  <pre id="chat-apply-diff" class="diff"></pre>
-  <div class="dialog-actions">
-    <button id="chat-apply-confirm" class="primary">Apply</button>
-    <button id="chat-apply-discard">Discard</button>
-  </div>
 </dialog>
 
 <!-- Code artifact viewer -->

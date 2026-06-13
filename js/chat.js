@@ -7,19 +7,39 @@ import { getSettings, saveSettings,
 import { emit, subscribe } from './state.js';
 import { getCode, setCode } from './editor.js';
 import { updateActiveCode } from './projects.js';
-import { captureSnapshot } from './viewer.js';
+import { captureSnapshot, captureMultiView, getMeshStats } from './viewer.js';
 import { toast } from './ui.js';
-import { diffLines } from './util/linediff.js';
 
 export const DEFAULT_SYSTEM_PROMPT =
 `You are an expert CAD designer working inside ScadPad, a mobile OpenSCAD editor. The user's current OpenSCAD code is provided in <current_code> tags. Work from that code to achieve what the user needs.
 
+To change the model you MUST call the apply_and_render tool with the COMPLETE updated file — do not paste OpenSCAD code into your text reply. The tool replaces the editor contents, renders the model, and returns either a rendered image plus its dimensions, or the compiler error. Inspect what comes back, and if the geometry is wrong or fails to compile, call apply_and_render again with a fix. When the model looks right, stop calling the tool and give a one- or two-sentence summary.
+
+The rendered image is a 2×2 grid of four labelled views in OpenSCAD's Z-up frame: ISO (corner), FRONT (looking along -Y), RIGHT (looking along +X), and TOP (looking down -Z). Use the labels to orient yourself; the image is perspective, so judge sizes from the reported bounding box, not from pixels.
+
 Rules:
-- When you change the model, reply with the COMPLETE updated OpenSCAD file in a single \`\`\`openscad fenced code block. The app replaces the editor contents with that block and re-renders automatically, so never reply with fragments, diffs, or multiple alternative code blocks.
+- Always pass the COMPLETE file to apply_and_render — never fragments or diffs.
 - Keep the code valid OpenSCAD. Preserve the user's Customizer parameters (top-level variables with their // [min:max] annotations and // descriptions) unless asked to change them.
-- The user may attach a screenshot of the rendered model so you can check the result of your previous code. Use it to verify the geometry looks right and iterate if it doesn't.
-- Keep explanations brief — one or two sentences before the code block. The user is on a phone.
+- Keep explanations brief — the user is on a phone.
 - If a request is ambiguous, make a sensible choice and note it briefly rather than asking questions.`;
+
+// Tool the model calls to apply code to the editor and render it. The handler
+// (see send()) returns a multi-view image + dimensions on success, or the
+// compiler error on failure, closing the edit -> render -> inspect loop.
+const APPLY_AND_RENDER_TOOL = {
+  name: 'apply_and_render',
+  description:
+    'Replace the entire OpenSCAD editor contents with `code`, render the model, and return the result. '
+    + 'On success you get a 2×2 image (ISO, FRONT, RIGHT, TOP views, OpenSCAD Z-up) plus the bounding-box '
+    + 'dimensions and triangle count. On failure you get the compiler error. Always send the COMPLETE file.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      code: { type: 'string', description: 'The complete OpenSCAD source for the whole file.' },
+    },
+    required: ['code'],
+  },
+};
 
 // Conversation state. History stores text-only content; the rendered-model
 // snapshot is attached only to the outgoing (latest) user message so old
@@ -32,6 +52,11 @@ let history = [];
 let lastCodeSeenByModel = null;
 let busy = false;
 let sdkClientPromise = null;
+
+// Tool-loop control: stopRequested is set by the Stop button; activeStream is
+// the in-flight SDK stream so Stop can abort the current model reply.
+let stopRequested = false;
+let activeStream = null;
 
 // Persistence bookkeeping for the active session.
 let currentProjectId = null;
@@ -171,15 +196,7 @@ function addNote(text, isError = false) {
   container.scrollTop = container.scrollHeight;
 }
 
-// ---------- code extraction / apply ----------
-
-function extractCodeBlock(text) {
-  const matches = [...text.matchAll(/```(?:openscad|scad)?\n([\s\S]*?)```/g)];
-  if (!matches.length) return null;
-  const code = matches[matches.length - 1][1].trim();
-  // Heuristic guard: ignore trivial snippets the model quoted in passing.
-  return code.length > 10 ? code : null;
-}
+// ---------- code apply ----------
 
 function applyCode(code) {
   setCode(code);
@@ -188,28 +205,127 @@ function applyCode(code) {
   emit('code:changed', { code, immediate: true });
 }
 
-// Pending proposal awaiting the user's Apply/Discard choice (review mode).
-let pendingApplyCode = null;
+// ---------- busy / status UI ----------
 
-// Render a unified line diff into the apply dialog and open it. The user's
-// editor is untouched until they tap Apply. Note: lastCodeSeenByModel is NOT
-// advanced here — only applyCode() does that — so a discarded proposal still
-// re-sends <current_code> on the next turn.
-function openApplyDialog(oldCode, newCode) {
-  pendingApplyCode = newCode;
-  const diff = $('chat-apply-diff');
-  diff.textContent = '';
-  for (const row of diffLines(oldCode, newCode)) {
-    const span = document.createElement('span');
-    span.className = `diff-${row.type}`;
-    const sign = row.type === 'add' ? '+' : row.type === 'del' ? '-' : ' ';
-    span.textContent = `${sign} ${row.text}\n`;
-    diff.appendChild(span);
+// Toggle the composer between Send (idle) and Stop (a reply is in flight). The
+// button stays enabled while busy so it can interrupt; send() guards re-entry.
+function setBusy(on) {
+  busy = on;
+  const btn = $('chat-send-btn');
+  btn.classList.toggle('stop', on);
+  btn.title = on ? 'Stop' : 'Send';
+  btn.textContent = on ? '■' : '➤'; // ■ / ➤
+}
+
+// A single status line at the bottom of the transcript: animated dots plus a
+// label ("Thinking…" / "Rendering…"). Pass null to remove it.
+function setStatus(text) {
+  const container = $('chat-messages');
+  let el = $('chat-status');
+  if (!text) { el?.remove(); return; }
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'chat-status';
+    el.className = 'chat-status';
+    container.appendChild(el);
   }
-  $('chat-apply-dialog').showModal();
+  el.textContent = '';
+  const dots = document.createElement('span');
+  dots.className = 'chat-typing';
+  dots.append(document.createElement('span'), document.createElement('span'), document.createElement('span'));
+  const label = document.createElement('span');
+  label.textContent = text;
+  el.append(dots, label);
+  container.scrollTop = container.scrollHeight;
+}
+
+// ---------- tool-result image button ----------
+
+// Show a rendered-image button in the transcript; clicking opens it in the
+// preview modal. This is exactly the image handed to the model as the tool
+// result, so the user can see what Claude saw.
+function addImageButton(label, dataUrl, caption) {
+  const container = $('chat-messages');
+  const row = document.createElement('div');
+  row.className = 'chat-tool-row';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'chat-code-btn';
+  btn.textContent = `\u{1F5BC} ${label}`;
+  btn.addEventListener('click', () => openImageModal(dataUrl, caption));
+  row.appendChild(btn);
+  container.appendChild(row);
+  container.scrollTop = container.scrollHeight;
+}
+
+function openImageModal(dataUrl, caption) {
+  previewDataUrl = dataUrl;
+  const img = $('chat-preview-img');
+  img.onload = () => { $('chat-preview-dims').textContent = caption || `${img.naturalWidth} × ${img.naturalHeight}px`; };
+  img.src = dataUrl;
+  $('chat-preview-dialog').showModal();
+}
+
+// ---------- apply_and_render tool handler ----------
+
+// Apply code to the editor and resolve once the render settles (render:done or
+// render:error). The render is driven by the normal pipeline via applyCode().
+function applyAndAwaitRender(code) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (res) => {
+      if (settled) return;
+      settled = true;
+      offDone(); offErr(); clearTimeout(timer);
+      resolve(res);
+    };
+    const offDone = subscribe('render:done', (p) => finish({ ok: true, elapsedMs: p.elapsedMs }));
+    const offErr = subscribe('render:error', (p) => finish({ ok: false, error: p.message }));
+    const timer = setTimeout(() => finish({ ok: false, error: 'Render timed out after 90s.' }), 90000);
+    applyCode(code);
+  });
+}
+
+// Run one apply_and_render call: apply + render, surface the image/error in the
+// UI, and return the content blocks for the tool_result sent back to the model.
+async function runApplyAndRender(code) {
+  setStatus('Rendering…');
+  const res = await applyAndAwaitRender(code);
+  if (!res.ok) {
+    addNote(`Render failed: ${res.error}`, true);
+    return [{ type: 'text',
+      text: `Render failed: ${res.error}\nFix the code and call apply_and_render again with the complete file.` }];
+  }
+  const img = captureMultiView();
+  const stats = getMeshStats();
+  const dims = stats
+    ? `${stats.size[0]} × ${stats.size[1]} × ${stats.size[2]} mm · ${stats.triangles} tris`
+    : 'unknown size';
+  const text = `Render OK. Bounding box ${dims}. The image shows ISO, FRONT, RIGHT and TOP `
+    + `views in OpenSCAD Z-up coordinates.`;
+  const blocks = [{ type: 'text', text }];
+  if (img) {
+    addImageButton('View render — iso · front · right · top',
+      `data:${img.mediaType};base64,${img.data}`, `Bounding box: ${dims}`);
+    blocks.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } });
+  }
+  return blocks;
+}
+
+function isAbortError(e) {
+  return e?.name === 'AbortError' || e?.name === 'APIUserAbortError' || /abort/i.test(e?.message || '');
 }
 
 // ---------- send ----------
+
+// Stop the current reply: abort the in-flight stream and break the loop after
+// the current step finishes.
+function stop() {
+  if (!busy) return;
+  stopRequested = true;
+  setStatus('Stopping…');
+  activeStream?.abort();
+}
 
 async function send() {
   const input = $('chat-input');
@@ -225,8 +341,8 @@ async function send() {
     return;
   }
 
-  busy = true;
-  $('chat-send-btn').disabled = true;
+  stopRequested = false;
+  setBusy(true);
   input.value = '';
   input.style.height = '';
 
@@ -243,11 +359,10 @@ async function send() {
 
   const snapshot = settings.chatSendSnapshot ? captureSnapshot() : null;
   addBubble('user', prompt, { withSnapshot: !!snapshot, ts: userTs });
-  const assistantBubble = addBubble('assistant', '…');
-  const assistantBody = assistantBubble.querySelector('.chat-msg-body');
-  const startedAt = Date.now();
 
-  // History is text-only; attach the snapshot to the outgoing message only.
+  // Working message list for the API. History is text-only; the starting-state
+  // snapshot is attached to the outgoing user turn only, and tool round-trips
+  // for THIS send are appended here (not persisted — see below).
   const messages = history.map(m => ({ role: m.role, content: m.content }));
   if (snapshot) {
     messages[messages.length - 1] = {
@@ -259,56 +374,113 @@ async function send() {
     };
   }
 
+  const maxTurns = Math.max(1, Number(settings.chatMaxTurns) || 10);
+  const startedAt = Date.now();
+  const assistantTextParts = [];
+  let totalIn = 0, totalOut = 0;
+  let lastMeta = null;
+  let lastStop = null;
+  let failed = false;
+
   try {
-    const stream = client.messages.stream({
-      model: settings.chatModel,
-      max_tokens: Math.max(256, Number(settings.chatMaxTokens) || 4096),
-      system: getSystemPrompt(),
-      messages,
-    });
+    for (let turn = 0; turn < maxTurns; turn++) {
+      if (stopRequested) break;
 
-    let accumulated = '';
-    stream.on('text', (delta) => {
-      accumulated += delta;
-      renderMessageBody(assistantBody, accumulated);
-      $('chat-messages').scrollTop = $('chat-messages').scrollHeight;
-    });
+      setStatus('Thinking…');
+      const assistantBubble = addBubble('assistant', '…');
+      const assistantBody = assistantBubble.querySelector('.chat-msg-body');
 
-    const final = await stream.finalMessage();
-    const text = final.content.filter(b => b.type === 'text').map(b => b.text).join('');
-    const meta = {
-      model: settings.chatModel,
-      durationMs: Date.now() - startedAt,
-      usage: { input_tokens: final.usage.input_tokens, output_tokens: final.usage.output_tokens },
-    };
-    history.push({ role: 'assistant', content: text, ts: Date.now(), meta });
-    renderMessageBody(assistantBody, text);
-    setBubbleStats(assistantBubble, meta);
+      const stream = client.messages.stream({
+        model: settings.chatModel,
+        max_tokens: Math.max(256, Number(settings.chatMaxTokens) || 4096),
+        system: getSystemPrompt(),
+        messages,
+        tools: [APPLY_AND_RENDER_TOOL],
+      });
+      activeStream = stream;
 
-    if (final.stop_reason === 'max_tokens') {
-      addNote('Reply was cut off by the max-token budget — no code was applied. '
-        + 'Raise the limit in Chat settings or ask Claude to be brief.', true);
-    } else {
-      const newCode = extractCodeBlock(text);
-      if (newCode && newCode !== code) {
-        if (settings.chatAutoApply) {
-          applyCode(newCode);
-          addNote('Code updated — rendering…');
-        } else {
-          openApplyDialog(code, newCode);
-        }
+      let accumulated = '';
+      stream.on('text', (delta) => {
+        accumulated += delta;
+        renderMessageBody(assistantBody, accumulated);
+        $('chat-messages').scrollTop = $('chat-messages').scrollHeight;
+      });
+
+      let final;
+      try {
+        final = await stream.finalMessage();
+      } catch (e) {
+        if (isAbortError(e)) { if (!accumulated) assistantBubble.remove(); break; }
+        throw e;
+      } finally {
+        activeStream = null;
       }
+
+      const text = final.content.filter(b => b.type === 'text').map(b => b.text).join('');
+      totalIn += final.usage.input_tokens;
+      totalOut += final.usage.output_tokens;
+      lastMeta = {
+        model: settings.chatModel,
+        durationMs: Date.now() - startedAt,
+        usage: { input_tokens: totalIn, output_tokens: totalOut },
+      };
+      lastStop = final.stop_reason;
+
+      if (text) {
+        renderMessageBody(assistantBody, text);
+        setBubbleStats(assistantBubble, lastMeta);
+        assistantTextParts.push(text);
+      } else {
+        assistantBubble.remove();
+      }
+
+      // Replay the assistant turn verbatim (text + any tool_use blocks) so the
+      // next request continues the same tool exchange.
+      messages.push({ role: 'assistant', content: final.content });
+
+      if (final.stop_reason === 'tool_use') {
+        const toolResults = [];
+        for (const block of final.content) {
+          if (block.type !== 'tool_use') continue;
+          const content = block.name === 'apply_and_render'
+            ? await runApplyAndRender(block.input?.code ?? '')
+            : [{ type: 'text', text: `Unknown tool: ${block.name}` }];
+          toolResults.push({ type: 'tool_result', tool_use_id: block.id, content });
+        }
+        messages.push({ role: 'user', content: toolResults });
+        continue; // let the model inspect the render and decide what's next
+      }
+
+      if (final.stop_reason === 'max_tokens') {
+        addNote('Reply was cut off by the max-token budget. '
+          + 'Raise the limit in Chat settings or ask Claude to be brief.', true);
+      }
+      break; // end_turn: the model is done
     }
-    persistCurrentSession();
+
+    if (lastStop === 'tool_use' && !stopRequested) {
+      addNote(`Stopped at the ${maxTurns}-turn limit. Send another message to let Claude continue, `
+        + 'or raise the limit on the toolbar.');
+    }
   } catch (e) {
-    history.pop(); // drop the failed user turn so a retry resends it cleanly
-    lastCodeSeenByModel = null;
-    assistantBubble.remove();
+    failed = true;
     addNote(`Request failed: ${e.message}`, true);
+    // Nothing applied and no reply text: drop the user turn so a retry resends
+    // it (with <current_code>) cleanly.
+    if (!assistantTextParts.length) {
+      history.pop();
+      lastCodeSeenByModel = null;
+    }
   } finally {
-    busy = false;
-    $('chat-send-btn').disabled = false;
+    setStatus(null);
+    setBusy(false);
+    activeStream = null;
   }
+
+  if (!failed && assistantTextParts.length) {
+    history.push({ role: 'assistant', content: assistantTextParts.join('\n\n'), ts: Date.now(), meta: lastMeta });
+  }
+  persistCurrentSession();
 }
 
 // ---------- session persistence ----------
@@ -493,12 +665,13 @@ async function copyPreview() {
 
 export function initChat() {
   const input = $('chat-input');
-  $('chat-send-btn').addEventListener('click', send);
+  // The send button doubles as a Stop button while a reply is in flight.
+  $('chat-send-btn').addEventListener('click', () => (busy ? stop() : send()));
   $('chat-clear-btn').addEventListener('click', newChat);
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      send();
+      if (!busy) send();
     }
   });
   // Auto-grow the input up to ~5 lines.
@@ -518,6 +691,9 @@ export function initChat() {
   $('chat-snapshot').checked = settings.chatSendSnapshot;
   $('chat-snapshot').addEventListener('change', e =>
     saveSettings({ chatSendSnapshot: e.target.checked }));
+  $('chat-max-turns').value = String(settings.chatMaxTurns);
+  $('chat-max-turns').addEventListener('change', e =>
+    saveSettings({ chatMaxTurns: Number(e.target.value) || 10 }));
   $('chat-preview-btn').addEventListener('click', showPreview);
   $('chat-preview-copy').addEventListener('click', copyPreview);
   $('chat-code-copy').addEventListener('click', async () => {
@@ -533,28 +709,10 @@ export function initChat() {
     $('chat-history-dialog').showModal();
   });
 
-  // ----- Apply-confirm dialog (review mode) -----
-  $('chat-apply-confirm').addEventListener('click', () => {
-    $('chat-apply-dialog').close();
-    if (pendingApplyCode != null) {
-      applyCode(pendingApplyCode);
-      pendingApplyCode = null;
-      addNote('Code updated — rendering…');
-    }
-  });
-  $('chat-apply-discard').addEventListener('click', () => {
-    $('chat-apply-dialog').close();
-    pendingApplyCode = null;
-    addNote('Change discarded.');
-  });
-
   // ----- Chat settings dialog -----
   $('set-anthropic-key').value = settings.anthropicApiKey;
   $('set-anthropic-key').addEventListener('change', e =>
     saveSettings({ anthropicApiKey: e.target.value.trim() }));
-  $('chat-set-auto-apply').checked = settings.chatAutoApply;
-  $('chat-set-auto-apply').addEventListener('change', e =>
-    saveSettings({ chatAutoApply: e.target.checked }));
   $('chat-set-max-tokens').value = settings.chatMaxTokens;
   $('chat-set-system').value = getSystemPrompt();
 
