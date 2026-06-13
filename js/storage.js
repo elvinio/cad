@@ -103,6 +103,30 @@ export function saveSettings(patch) {
   return settings;
 }
 
+// ---------- Chat sessions (per project) ----------
+// Each project keeps a list of saved conversations (text-only, no snapshots).
+// Capped to the most recent MAX_CHAT_SESSIONS so chat never starves the
+// localStorage quota that projects also share.
+const MAX_CHAT_SESSIONS = 20;
+const chatKey = projectId => `${PREFIX}.chat.${projectId || 'none'}`;
+
+// Newest first.
+export function getChatSessions(projectId) {
+  return read(chatKey(projectId), []);
+}
+
+// Upsert a session by id, restamp `updated`, move it to the front, and prune.
+export function saveChatSession(projectId, session) {
+  const sessions = getChatSessions(projectId).filter(s => s.id !== session.id);
+  sessions.unshift({ ...session, updated: Date.now() });
+  return write(chatKey(projectId), sessions.slice(0, MAX_CHAT_SESSIONS));
+}
+
+export function deleteChatSession(projectId, sessionId) {
+  const sessions = getChatSessions(projectId).filter(s => s.id !== sessionId);
+  write(chatKey(projectId), sessions);
+}
+
 // ---------- Library zips (IndexedDB) ----------
 
 const DB_NAME = 'scadpad';

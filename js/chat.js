@@ -2,7 +2,8 @@
 // The SDK (vendor/anthropic/) is dynamically imported on first send so the
 // app still boots offline; chat itself naturally needs the network.
 
-import { getSettings, saveSettings } from './storage.js';
+import { getSettings, saveSettings,
+  getChatSessions, saveChatSession, deleteChatSession } from './storage.js';
 import { emit, subscribe } from './state.js';
 import { getCode, setCode } from './editor.js';
 import { updateActiveCode } from './projects.js';
@@ -22,10 +23,20 @@ Rules:
 // Conversation state. History stores text-only content; the rendered-model
 // snapshot is attached only to the outgoing (latest) user message so old
 // images don't accumulate input-token cost.
+//
+// A "session" is one conversation. It lives in memory here and is persisted
+// (per project, text-only) to localStorage after every turn so it survives
+// reloads and project switches — letting you resume an iteration later.
 let history = [];
 let lastCodeSeenByModel = null;
 let busy = false;
 let sdkClientPromise = null;
+
+// Persistence bookkeeping for the active session.
+let currentProjectId = null;
+let currentSessionId = null;       // null until the session has been saved once
+let currentSessionCreated = null;
+let previewDataUrl = null;         // last image shown in the preview dialog
 
 const $ = id => document.getElementById(id);
 
@@ -189,6 +200,7 @@ async function send() {
     }
     const u = final.usage;
     addNote(`${settings.chatModel} · ${u.input_tokens} in / ${u.output_tokens} out tokens`);
+    persistCurrentSession();
   } catch (e) {
     history.pop(); // drop the failed user turn so a retry resends it cleanly
     lastCodeSeenByModel = null;
@@ -200,9 +212,25 @@ async function send() {
   }
 }
 
-function clearChat() {
+// ---------- session persistence ----------
+
+// Strip the <current_code> wrapper we prepend to outgoing turns so the
+// stored/restored bubble shows only what the user actually typed.
+function displayText(content) {
+  const text = typeof content === 'string'
+    ? content
+    : (content.find?.(b => b.type === 'text')?.text || '');
+  return text.replace(/^<current_code>[\s\S]*?<\/current_code>\n\n/, '');
+}
+
+function resetSessionState() {
   history = [];
   lastCodeSeenByModel = null;
+  currentSessionId = null;
+  currentSessionCreated = null;
+}
+
+function showEmptyHint() {
   const container = $('chat-messages');
   container.textContent = '';
   const hint = document.createElement('p');
@@ -212,12 +240,160 @@ function clearChat() {
   container.appendChild(hint);
 }
 
+function renderHistoryToUI() {
+  const container = $('chat-messages');
+  container.textContent = '';
+  if (!history.length) { showEmptyHint(); return; }
+  for (const m of history) addBubble(m.role, displayText(m.content));
+}
+
+// Write the in-memory conversation back to localStorage (no-op when empty).
+function persistCurrentSession() {
+  if (!history.length) return;
+  if (!currentSessionId) currentSessionId = crypto.randomUUID();
+  if (!currentSessionCreated) currentSessionCreated = Date.now();
+  const firstUser = history.find(m => m.role === 'user');
+  const title = (firstUser ? displayText(firstUser.content) : 'Chat')
+    .replace(/\s+/g, ' ').trim().slice(0, 60) || 'Chat';
+  saveChatSession(currentProjectId, {
+    id: currentSessionId,
+    title,
+    messages: history,
+    lastCodeSeenByModel,
+    created: currentSessionCreated,
+  });
+}
+
+// "New chat": archive what we have, then start an empty session.
+function newChat() {
+  persistCurrentSession();
+  resetSessionState();
+  showEmptyHint();
+}
+
+// Continue a saved conversation (archives the current one first).
+function loadSession(sess) {
+  persistCurrentSession();
+  history = sess.messages.map(m => ({ role: m.role, content: m.content }));
+  lastCodeSeenByModel = sess.lastCodeSeenByModel ?? null;
+  currentSessionId = sess.id;
+  currentSessionCreated = sess.created;
+  renderHistoryToUI();
+}
+
+// Switching projects: save the old conversation, resume the new project's
+// most recent one (or start empty if it has none).
+function onProjectChanged({ project }) {
+  persistCurrentSession();
+  currentProjectId = project ? project.id : null;
+  resetSessionState();
+  const sessions = getChatSessions(currentProjectId);
+  if (sessions.length) {
+    const s = sessions[0];
+    history = s.messages.map(m => ({ role: m.role, content: m.content }));
+    lastCodeSeenByModel = s.lastCodeSeenByModel ?? null;
+    currentSessionId = s.id;
+    currentSessionCreated = s.created;
+  }
+  renderHistoryToUI();
+}
+
+// ---------- history dialog ----------
+
+function renderHistoryList() {
+  const list = $('chat-history-list');
+  list.textContent = '';
+  const sessions = getChatSessions(currentProjectId);
+  if (!sessions.length) {
+    const li = document.createElement('li');
+    li.className = 'chat-history-empty';
+    li.textContent = 'No saved chats for this project yet.';
+    list.appendChild(li);
+    return;
+  }
+  for (const s of sessions) {
+    const li = document.createElement('li');
+
+    const open = document.createElement('button');
+    open.className = 'p-open' + (s.id === currentSessionId ? ' current' : '');
+    const title = document.createElement('span');
+    title.textContent = s.title;
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = `${new Date(s.updated).toLocaleString()} · ${s.messages.length} msgs`;
+    open.append(title, meta);
+    open.addEventListener('click', () => {
+      loadSession(s);
+      $('chat-history-dialog').close();
+    });
+    li.appendChild(open);
+
+    const del = document.createElement('button');
+    del.className = 'li-btn';
+    del.title = 'Delete';
+    del.textContent = '🗑';
+    del.addEventListener('click', () => {
+      if (!confirm('Delete this saved chat?')) return;
+      deleteChatSession(currentProjectId, s.id);
+      if (s.id === currentSessionId) { resetSessionState(); renderHistoryToUI(); }
+      renderHistoryList();
+    });
+    li.appendChild(del);
+
+    list.appendChild(li);
+  }
+}
+
+// ---------- image preview ----------
+
+function showPreview() {
+  const snap = captureSnapshot();
+  if (!snap) { toast('Nothing rendered yet to preview.', 'error'); return; }
+  previewDataUrl = `data:${snap.mediaType};base64,${snap.data}`;
+  const img = $('chat-preview-img');
+  img.onload = () => {
+    const off = getSettings().chatSendSnapshot
+      ? '' : ' · snapshot is OFF — toggle 📷 on to send it';
+    $('chat-preview-dims').textContent =
+      `${img.naturalWidth} × ${img.naturalHeight}px · ${snap.mediaType}${off}`;
+  };
+  img.src = previewDataUrl;
+  $('chat-preview-dialog').showModal();
+}
+
+// Clipboard image write needs a PNG blob; re-encode the JPEG data URL.
+function dataUrlToPngBlob(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth;
+      c.height = img.naturalHeight;
+      c.getContext('2d').drawImage(img, 0, 0);
+      c.toBlob(b => b ? resolve(b) : reject(new Error('encode failed')), 'image/png');
+    };
+    img.onerror = () => reject(new Error('image load failed'));
+    img.src = url;
+  });
+}
+
+async function copyPreview() {
+  if (!previewDataUrl) return;
+  try {
+    const blob = await dataUrlToPngBlob(previewDataUrl);
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    toast('Image copied to clipboard');
+  } catch (e) {
+    toast(`Copy failed: ${e.message}`, 'error');
+  }
+}
+
 // ---------- init ----------
 
 export function initChat() {
   const input = $('chat-input');
   $('chat-send-btn').addEventListener('click', send);
-  $('chat-clear-btn').addEventListener('click', clearChat);
+  $('chat-clear-btn').addEventListener('click', newChat);
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
@@ -230,25 +406,33 @@ export function initChat() {
     input.style.height = Math.min(input.scrollHeight, 120) + 'px';
   });
 
-  // A different project is a different conversation.
-  subscribe('project:changed', clearChat);
+  // A different project resumes that project's most recent conversation.
+  subscribe('project:changed', onProjectChanged);
+
+  // ----- Chat panel toolbar (model + snapshot toggle + preview + history) -----
+  const settings = getSettings();
+  $('chat-model').value = settings.chatModel;
+  $('chat-model').addEventListener('change', e =>
+    saveSettings({ chatModel: e.target.value }));
+  $('chat-snapshot').checked = settings.chatSendSnapshot;
+  $('chat-snapshot').addEventListener('change', e =>
+    saveSettings({ chatSendSnapshot: e.target.checked }));
+  $('chat-preview-btn').addEventListener('click', showPreview);
+  $('chat-preview-copy').addEventListener('click', copyPreview);
+  $('chat-history-btn').addEventListener('click', () => {
+    renderHistoryList();
+    $('chat-history-dialog').showModal();
+  });
 
   // ----- Chat settings dialog -----
-  const settings = getSettings();
   $('set-anthropic-key').value = settings.anthropicApiKey;
   $('set-anthropic-key').addEventListener('change', e =>
     saveSettings({ anthropicApiKey: e.target.value.trim() }));
-  $('chat-set-model').value = settings.chatModel;
   $('chat-set-max-tokens').value = settings.chatMaxTokens;
-  $('chat-set-snapshot').checked = settings.chatSendSnapshot;
   $('chat-set-system').value = getSystemPrompt();
 
-  $('chat-set-model').addEventListener('change', e =>
-    saveSettings({ chatModel: e.target.value }));
   $('chat-set-max-tokens').addEventListener('change', e =>
     saveSettings({ chatMaxTokens: Math.min(16000, Math.max(256, Number(e.target.value) || 4096)) }));
-  $('chat-set-snapshot').addEventListener('change', e =>
-    saveSettings({ chatSendSnapshot: e.target.checked }));
   $('chat-set-system').addEventListener('change', e => {
     const text = e.target.value.trim();
     // Storing null keeps the prompt tracking future default updates.
