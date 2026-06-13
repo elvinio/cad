@@ -124,10 +124,10 @@ body {
 }
 .overlay-btn {
   position: absolute;
-  right: 6px; top: 6px;
   background: rgba(0,0,0,0.35);
 }
-#maximize-btn { top: 44px; }
+#reset-view-btn { left: 6px; top: 6px; }
+#maximize-btn   { right: 6px; top: 6px; }
 
 #viewer-panel.maximized {
   position: fixed;
