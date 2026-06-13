@@ -162,8 +162,12 @@ export function parseOFF(text) {
   // just the renderer default. Strip vertex colors so the user's swatch applies.
   if (hasColor) {
     const r0 = colors[0], g0 = colors[1], b0 = colors[2];
-    const uniform = colors.every((v, i) =>
-      Math.abs(v - (i % 3 === 0 ? r0 : i % 3 === 1 ? g0 : b0)) < 0.005);
+    let uniform = true;
+    for (let i = 0; i < colors.length; i += 3) {
+      if (Math.abs(colors[i] - r0) > 0.005 ||
+          Math.abs(colors[i + 1] - g0) > 0.005 ||
+          Math.abs(colors[i + 2] - b0) > 0.005) { uniform = false; break; }
+    }
     if (uniform) hasColor = false;
   }
 
