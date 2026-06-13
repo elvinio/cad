@@ -7,15 +7,17 @@ import { getSettings, saveSettings,
 import { emit, subscribe } from './state.js';
 import { getCode, setCode } from './editor.js';
 import { updateActiveCode } from './projects.js';
-import { captureSnapshot, captureMultiView, getMeshStats } from './viewer.js';
+import { captureView, captureMultiView, getMeshStats } from './viewer.js';
 import { toast } from './ui.js';
 
 export const DEFAULT_SYSTEM_PROMPT =
 `You are an expert CAD designer working inside ScadPad, a mobile OpenSCAD editor. The user's current OpenSCAD code is provided in <current_code> tags. Work from that code to achieve what the user needs.
 
-To change the model you MUST call the apply_and_render tool with the COMPLETE updated file — do not paste OpenSCAD code into your text reply. The tool replaces the editor contents, renders the model, and returns either a rendered image plus its dimensions, or the compiler error. Inspect what comes back, and if the geometry is wrong or fails to compile, call apply_and_render again with a fix. When the model looks right, stop calling the tool and give a one- or two-sentence summary.
+To change the model you MUST call the apply_and_render tool with the COMPLETE updated file — do not paste OpenSCAD code into your text reply. apply_and_render replaces the editor contents and renders the model, returning the bounding-box dimensions and triangle count on success, or the compiler error on failure — it returns NO image. If it fails to compile, call apply_and_render again with a fix.
 
-The rendered image is a 2×2 grid of four labelled views in OpenSCAD's Z-up frame: ISO (corner), FRONT (looking along -Y), RIGHT (looking along +X), and TOP (looking down -Z). Use the labels to orient yourself; the image is perspective, so judge sizes from the reported bounding box, not from pixels.
+To SEE the model, call the look tool. By default look returns a 2×2 grid of four labelled views in OpenSCAD's Z-up frame: ISO (corner), FRONT (looking along -Y), RIGHT (looking along +X), and TOP (looking down -Z). Pass a single named view (e.g. view:"bottom"), or view:"custom" with azimuth/elevation degrees, to inspect a specific angle such as an underside or a detail. A typical step is apply_and_render then look to verify the geometry — but don't call look if you don't need to, since images cost tokens. The views are perspective, so judge sizes from the reported bounding box, not from pixels.
+
+When the model looks right, stop calling tools and give a one- or two-sentence summary.
 
 Rules:
 - Always pass the COMPLETE file to apply_and_render — never fragments or diffs.
@@ -24,20 +26,51 @@ Rules:
 - If a request is ambiguous, make a sensible choice and note it briefly rather than asking questions.`;
 
 // Tool the model calls to apply code to the editor and render it. The handler
-// (see send()) returns a multi-view image + dimensions on success, or the
-// compiler error on failure, closing the edit -> render -> inspect loop.
+// (runApplyAndRender) returns the bounding-box dimensions on success, or the
+// compiler error on failure — no image. Seeing the model is the look tool's job.
 const APPLY_AND_RENDER_TOOL = {
   name: 'apply_and_render',
   description:
-    'Replace the entire OpenSCAD editor contents with `code`, render the model, and return the result. '
-    + 'On success you get a 2×2 image (ISO, FRONT, RIGHT, TOP views, OpenSCAD Z-up) plus the bounding-box '
-    + 'dimensions and triangle count. On failure you get the compiler error. Always send the COMPLETE file.',
+    'Replace the entire OpenSCAD editor contents with `code` and render the model. '
+    + 'On success you get the bounding-box dimensions and triangle count (NO image — call look to see it). '
+    + 'On failure you get the compiler error. Always send the COMPLETE file.',
   input_schema: {
     type: 'object',
     properties: {
       code: { type: 'string', description: 'The complete OpenSCAD source for the whole file.' },
     },
     required: ['code'],
+  },
+};
+
+// Tool the model calls to SEE the current model. Renders an off-screen image
+// (runLook): a 2×2 grid of four views by default, or a single named/custom
+// angle. Decoupled from apply_and_render so confirming "did it compile?" costs
+// no image tokens and the model can choose what angle to inspect.
+const LOOK_TOOL = {
+  name: 'look',
+  description:
+    'Render the CURRENT model to an image so you can inspect it. Default is a 2×2 grid of four labelled '
+    + 'views (ISO, FRONT, RIGHT, TOP) in OpenSCAD Z-up coordinates. Pass a single named view, or '
+    + 'view:"custom" with azimuth/elevation degrees, to look from a specific angle (e.g. an underside or a '
+    + 'detail). Call apply_and_render first if you have changed the code.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      view: {
+        type: 'string',
+        enum: ['grid', 'iso', 'front', 'back', 'left', 'right', 'top', 'bottom', 'custom'],
+        description: 'Which view. "grid" (default) = 2×2 of iso/front/right/top.',
+      },
+      azimuth: {
+        type: 'number',
+        description: 'Custom only: degrees around +Z from +X (CCW). 0=+X (right), 90=+Y (back), -90=-Y (front).',
+      },
+      elevation: {
+        type: 'number',
+        description: 'Custom only: degrees above the XY plane. 90=straight down (top), -90=straight up.',
+      },
+    },
   },
 };
 
@@ -167,7 +200,7 @@ function addBubble(role, text, { withSnapshot = false, ts = Date.now(), meta = n
   if (withSnapshot) {
     const tag = document.createElement('span');
     tag.className = 'chat-snapshot-tag';
-    tag.textContent = '📷 snapshot attached';
+    tag.textContent = '📷 render attached';
     body.appendChild(tag);
   }
 
@@ -286,8 +319,17 @@ function applyAndAwaitRender(code) {
   });
 }
 
-// Run one apply_and_render call: apply + render, surface the image/error in the
-// UI, and return the content blocks for the tool_result sent back to the model.
+// Current bounding-box / triangle-count line, or a fallback if no mesh.
+function currentDims() {
+  const stats = getMeshStats();
+  return stats
+    ? `${stats.size[0]} × ${stats.size[1]} × ${stats.size[2]} mm · ${stats.triangles} tris`
+    : 'unknown size';
+}
+
+// Run one apply_and_render call: apply + render, surface progress/error in the
+// UI, and return the text-only tool_result. No image — the model calls look to
+// inspect the result.
 async function runApplyAndRender(code) {
   setStatus('Rendering…');
   const res = await applyAndAwaitRender(code);
@@ -296,20 +338,39 @@ async function runApplyAndRender(code) {
     return [{ type: 'text',
       text: `Render failed: ${res.error}\nFix the code and call apply_and_render again with the complete file.` }];
   }
-  const img = captureMultiView();
-  const stats = getMeshStats();
-  const dims = stats
-    ? `${stats.size[0]} × ${stats.size[1]} × ${stats.size[2]} mm · ${stats.triangles} tris`
-    : 'unknown size';
-  const text = `Render OK. Bounding box ${dims}. The image shows ISO, FRONT, RIGHT and TOP `
-    + `views in OpenSCAD Z-up coordinates.`;
-  const blocks = [{ type: 'text', text }];
-  if (img) {
-    addImageButton('View render — iso · front · right · top',
-      `data:${img.mediaType};base64,${img.data}`, `Bounding box: ${dims}`);
-    blocks.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } });
+  const dims = currentDims();
+  addNote(`Rendered — ${dims}`);
+  return [{ type: 'text',
+    text: `Render OK. Bounding box ${dims}. Call look to inspect the model.` }];
+}
+
+// Run one look call: capture the requested view off-screen, surface it as an
+// image button in the UI, and return the image (plus a description) as the
+// tool_result so the model can see the model.
+async function runLook(input = {}) {
+  setStatus('Rendering…');
+  if (!getMeshStats()) {
+    return [{ type: 'text', text: 'Nothing is rendered yet — call apply_and_render first.' }];
   }
-  return blocks;
+  const view = input.view || 'grid';
+  let img, label;
+  if (view === 'grid') {
+    img = captureMultiView();
+    label = 'iso · front · right · top';
+  } else {
+    img = captureView({ view, azimuth: input.azimuth, elevation: input.elevation });
+    label = img?.label || view;
+  }
+  if (!img) {
+    return [{ type: 'text', text: 'Nothing is rendered yet — call apply_and_render first.' }];
+  }
+  const dims = currentDims();
+  addImageButton(`View render — ${label}`,
+    `data:${img.mediaType};base64,${img.data}`, `Bounding box: ${dims}`);
+  return [
+    { type: 'text', text: `View: ${label}. Bounding box ${dims}. OpenSCAD Z-up coordinates.` },
+    { type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } },
+  ];
 }
 
 function isAbortError(e) {
@@ -349,15 +410,19 @@ async function send() {
   // Include current code when the model hasn't seen this version yet
   // (always on the first message, and again after manual edits).
   const code = getCode();
+  const codeIsNew = code !== lastCodeSeenByModel;
   let userText = prompt;
-  if (code !== lastCodeSeenByModel) {
+  if (codeIsNew) {
     userText = `<current_code>\n${code}\n</current_code>\n\n${prompt}`;
     lastCodeSeenByModel = code;
   }
   const userTs = Date.now();
   history.push({ role: 'user', content: userText, ts: userTs });
 
-  const snapshot = settings.chatSendSnapshot ? captureSnapshot() : null;
+  // Attach a starting 2×2 render only when the model hasn't seen this code yet
+  // (first message of a session, and after manual edits) — same gate as the
+  // <current_code> prepend — and only if the user has the toggle on.
+  const snapshot = (settings.chatSendSnapshot && codeIsNew) ? captureMultiView() : null;
   addBubble('user', prompt, { withSnapshot: !!snapshot, ts: userTs });
 
   // Working message list for the API. History is text-only; the starting-state
@@ -395,7 +460,7 @@ async function send() {
         max_tokens: Math.max(256, Number(settings.chatMaxTokens) || 4096),
         system: getSystemPrompt(),
         messages,
-        tools: [APPLY_AND_RENDER_TOOL],
+        tools: [APPLY_AND_RENDER_TOOL, LOOK_TOOL],
       });
       activeStream = stream;
 
@@ -442,9 +507,10 @@ async function send() {
         const toolResults = [];
         for (const block of final.content) {
           if (block.type !== 'tool_use') continue;
-          const content = block.name === 'apply_and_render'
-            ? await runApplyAndRender(block.input?.code ?? '')
-            : [{ type: 'text', text: `Unknown tool: ${block.name}` }];
+          let content;
+          if (block.name === 'apply_and_render') content = await runApplyAndRender(block.input?.code ?? '');
+          else if (block.name === 'look') content = await runLook(block.input ?? {});
+          else content = [{ type: 'text', text: `Unknown tool: ${block.name}` }];
           toolResults.push({ type: 'tool_result', tool_use_id: block.id, content });
         }
         messages.push({ role: 'user', content: toolResults });
@@ -620,13 +686,13 @@ function renderHistoryList() {
 // ---------- image preview ----------
 
 function showPreview() {
-  const snap = captureSnapshot();
+  const snap = captureMultiView();
   if (!snap) { toast('Nothing rendered yet to preview.', 'error'); return; }
   previewDataUrl = `data:${snap.mediaType};base64,${snap.data}`;
   const img = $('chat-preview-img');
   img.onload = () => {
     const off = getSettings().chatSendSnapshot
-      ? '' : ' · snapshot is OFF — toggle 📷 on to send it';
+      ? '' : ' · render is OFF — toggle 📷 on to attach it to your first message';
     $('chat-preview-dims').textContent =
       `${img.naturalWidth} × ${img.naturalHeight}px · ${snap.mediaType}${off}`;
   };

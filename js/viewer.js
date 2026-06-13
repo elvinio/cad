@@ -198,20 +198,94 @@ export function cycleDisplayMode() {
   return displayMode;
 }
 
-// JPEG snapshot of the current view for the AI chat (base64, no data: prefix).
-// Renders synchronously first because the WebGL buffer is cleared after each
-// frame (no preserveDrawingBuffer), then downscales onto a 2D canvas.
-export function captureSnapshot(maxDim = 768) {
+// Save the user's live camera + grid, run `body` (which frames + renders
+// off-screen), then restore the framing so a capture never disturbs the
+// interactive view. OrbitControls.update() rebuilds orientation from
+// position + target + up. Returns whatever `body` returns.
+function withFramedCapture(body) {
+  const saved = {
+    pos: camera.position.clone(),
+    up: camera.up.clone(),
+    target: controls.target.clone(),
+    near: camera.near, far: camera.far,
+    gridScale: grid.scale.x,
+  };
+  try {
+    return body();
+  } finally {
+    camera.position.copy(saved.pos);
+    camera.up.copy(saved.up);
+    camera.near = saved.near;
+    camera.far = saved.far;
+    camera.updateProjectionMatrix();
+    controls.target.copy(saved.target);
+    grid.scale.setScalar(saved.gridScale);
+    controls.update();
+    renderer.render(scene, camera);
+  }
+}
+
+// Bake a small dark-chip label into a capture so orientation can't desync from
+// any accompanying text. (x,y) is the top-left of the cell the label sits in.
+function drawLabel(ctx, text, x, y) {
+  ctx.font = '600 14px system-ui, sans-serif';
+  const tw = ctx.measureText(text).width;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(x + 4, y + 4, tw + 10, 20);
+  ctx.fillStyle = '#fff';
+  ctx.fillText(text, x + 9, y + 18);
+}
+
+// Single-view JPEG capture for the AI chat (base64, no data: prefix). Frames
+// the model from a named preset, or from a custom azimuth/elevation, renders
+// off-screen, and returns it labelled. The user's live camera is saved and
+// restored. Returns { mediaType, data, label }, or null if there's no mesh.
+//
+// Azimuth/elevation convention matches VIEW_DIRECTIONS: azimuth is degrees
+// around +Z from +X (CCW) — 0=+X (right), 90=+Y (back), -90=-Y (front);
+// elevation is degrees above the XY plane — 90=straight down (top).
+export function captureView({ view = 'iso', azimuth = 0, elevation = 20 } = {}, maxDim = 768) {
   if (!mesh || !renderer) return null;
-  renderer.render(scene, camera);
-  const src = renderer.domElement;
-  const scale = Math.min(1, maxDim / Math.max(src.width, src.height));
-  const out = document.createElement('canvas');
-  out.width = Math.max(1, Math.round(src.width * scale));
-  out.height = Math.max(1, Math.round(src.height * scale));
-  out.getContext('2d').drawImage(src, 0, 0, out.width, out.height);
-  const dataUrl = out.toDataURL('image/jpeg', 0.8);
-  return { mediaType: 'image/jpeg', data: dataUrl.slice(dataUrl.indexOf(',') + 1) };
+
+  let dirVec, up, label;
+  if (view === 'custom') {
+    const az = azimuth * Math.PI / 180, el = elevation * Math.PI / 180;
+    dirVec = new THREE.Vector3(
+      Math.cos(el) * Math.cos(az),
+      Math.cos(el) * Math.sin(az),
+      Math.sin(el));
+    // Gimbal lock near the poles: swap up to +Y, same rule setView uses.
+    up = Math.abs(elevation) > 80 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
+    label = `custom az${Math.round(azimuth)} el${Math.round(elevation)}`;
+  } else {
+    const known = !!VIEW_DIRECTIONS[view];
+    const v = VIEW_DIRECTIONS[view] || VIEW_DIRECTIONS.iso;
+    dirVec = new THREE.Vector3(v[0], v[1], v[2]);
+    up = (view === 'top' || view === 'bottom')
+      ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
+    label = known ? view : 'iso';
+  }
+
+  return withFramedCapture(() => {
+    frameFrom(dirVec, up);
+    renderer.render(scene, camera);
+    const src = renderer.domElement;
+    const scale = Math.min(1, maxDim / Math.max(src.width, src.height));
+    const out = document.createElement('canvas');
+    out.width = Math.max(1, Math.round(src.width * scale));
+    out.height = Math.max(1, Math.round(src.height * scale));
+    const ctx = out.getContext('2d');
+    ctx.fillStyle = '#0f1830';
+    ctx.fillRect(0, 0, out.width, out.height);
+    ctx.drawImage(src, 0, 0, out.width, out.height);
+    drawLabel(ctx, label.toUpperCase(), 0, 0);
+    const dataUrl = out.toDataURL('image/jpeg', 0.8);
+    return {
+      mediaType: 'image/jpeg',
+      data: dataUrl.slice(dataUrl.indexOf(',') + 1),
+      label,
+    };
+  });
 }
 
 // Views composited into the multi-view capture, in 2×2 grid order.
@@ -220,18 +294,10 @@ const MULTIVIEW_VIEWS = ['iso', 'front', 'right', 'top'];
 // Composite snapshot for the AI chat: four labelled views (iso/front/right/top)
 // in a 2×2 grid so the model can judge geometry without depth ambiguity. The
 // user's live camera is saved and restored, so this never disturbs their view.
-// Returns { mediaType, data } like captureSnapshot (base64, no data: prefix),
-// plus `views` (the labels, in grid order) for callers that describe it.
+// Returns { mediaType, data } (base64, no data: prefix), plus `views` (the
+// labels, in grid order) for callers that describe it.
 export function captureMultiView(maxDim = 1024) {
   if (!mesh || !renderer) return null;
-
-  const saved = {
-    pos: camera.position.clone(),
-    up: camera.up.clone(),
-    target: controls.target.clone(),
-    near: camera.near, far: camera.far,
-    gridScale: grid.scale.x,
-  };
 
   const src = renderer.domElement;
   // Each cell is half the output edge; fit the (square-ish) canvas into it.
@@ -245,42 +311,25 @@ export function captureMultiView(maxDim = 1024) {
   ctx.fillStyle = '#0f1830';
   ctx.fillRect(0, 0, out.width, out.height);
 
-  MULTIVIEW_VIEWS.forEach((name, idx) => {
-    const v = VIEW_DIRECTIONS[name];
-    const up = (name === 'top' || name === 'bottom')
-      ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
-    frameFrom(new THREE.Vector3(v[0], v[1], v[2]), up);
-    renderer.render(scene, camera);
-    const x = (idx % 2) * cellW, y = ((idx / 2) | 0) * cellH;
-    ctx.drawImage(src, x, y, cellW, cellH);
-    // Bake the view label into the image so orientation can't desync from text.
-    ctx.font = '600 14px system-ui, sans-serif';
-    const label = name.toUpperCase();
-    const tw = ctx.measureText(label).width;
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.fillRect(x + 4, y + 4, tw + 10, 20);
-    ctx.fillStyle = '#fff';
-    ctx.fillText(label, x + 9, y + 18);
+  return withFramedCapture(() => {
+    MULTIVIEW_VIEWS.forEach((name, idx) => {
+      const v = VIEW_DIRECTIONS[name];
+      const up = (name === 'top' || name === 'bottom')
+        ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
+      frameFrom(new THREE.Vector3(v[0], v[1], v[2]), up);
+      renderer.render(scene, camera);
+      const x = (idx % 2) * cellW, y = ((idx / 2) | 0) * cellH;
+      ctx.drawImage(src, x, y, cellW, cellH);
+      drawLabel(ctx, name.toUpperCase(), x, y);
+    });
+
+    const dataUrl = out.toDataURL('image/jpeg', 0.8);
+    return {
+      mediaType: 'image/jpeg',
+      data: dataUrl.slice(dataUrl.indexOf(',') + 1),
+      views: MULTIVIEW_VIEWS.slice(),
+    };
   });
-
-  // Restore the user's framing; OrbitControls.update() rebuilds orientation
-  // from position + target + up.
-  camera.position.copy(saved.pos);
-  camera.up.copy(saved.up);
-  camera.near = saved.near;
-  camera.far = saved.far;
-  camera.updateProjectionMatrix();
-  controls.target.copy(saved.target);
-  grid.scale.setScalar(saved.gridScale);
-  controls.update();
-  renderer.render(scene, camera);
-
-  const dataUrl = out.toDataURL('image/jpeg', 0.8);
-  return {
-    mediaType: 'image/jpeg',
-    data: dataUrl.slice(dataUrl.indexOf(',') + 1),
-    views: MULTIVIEW_VIEWS.slice(),
-  };
 }
 
 export function getMeshStats() {

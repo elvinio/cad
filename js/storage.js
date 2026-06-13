@@ -17,7 +17,7 @@ export const DEFAULT_SETTINGS = {
   anthropicApiKey: '',
   chatModel: 'claude-sonnet-4-6',
   chatMaxTokens: 4096,
-  chatSendSnapshot: true,
+  chatSendSnapshot: true,  // attach a starting 2×2 render to the first message (and after manual edits)
   chatMaxTurns: 10,     // safety cap on the agentic apply-and-render tool loop
   chatSystemPrompt: null, // null -> DEFAULT_SYSTEM_PROMPT in chat.js
 };
