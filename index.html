@@ -40,7 +40,7 @@
   <section id="bottom-panel">
     <nav id="panel-tabs">
       <button class="tab active" data-tab="code-view">Code</button>
-      <button class="tab" data-tab="customizer-view">Customizer</button>
+      <button class="tab" data-tab="customizer-view">Param</button>
       <button class="tab" data-tab="console-view">Console <span id="error-badge" hidden>!</span></button>
       <button class="tab" data-tab="doc-view">Doc</button>
       <button class="tab" data-tab="chat-view">Chat</button>
@@ -64,7 +64,7 @@
     <div id="chat-view" class="tab-view">
       <div id="chat-messages">
         <p class="hint" id="chat-empty-hint">Ask Claude to modify the current model.
-          Set your Anthropic API key in Settings first.</p>
+          Set your Anthropic API key in Chat settings first.</p>
       </div>
       <div id="chat-input-row">
         <button id="chat-clear-btn" class="icon-btn" title="New chat">&#128465;</button>
@@ -147,15 +147,6 @@
   <label class="field checkbox"><input id="set-final-export" type="checkbox" checked>
     Use final quality for STL export</label>
 
-  <h3>AI Chat</h3>
-  <label class="field">Anthropic API key
-    <input id="set-anthropic-key" type="password" placeholder="sk-ant-…"
-      autocomplete="off" autocapitalize="off" spellcheck="false">
-  </label>
-  <p class="hint">Stored only in this app's local storage on this device — other sites cannot
-    read it. Requests go directly from your browser to api.anthropic.com.
-    Model and prompt options are under Menu &rarr; Chat settings.</p>
-
   <h3>Google Drive</h3>
   <label class="field">OAuth Client ID
     <input id="set-client-id" type="text" placeholder="xxxxx.apps.googleusercontent.com">
@@ -183,6 +174,13 @@
 <!-- Chat settings -->
 <dialog id="chat-settings-dialog">
   <h2>Chat settings</h2>
+
+  <label class="field">Anthropic API key
+    <input id="set-anthropic-key" type="password" placeholder="sk-ant-…"
+      autocomplete="off" autocapitalize="off" spellcheck="false">
+  </label>
+  <p class="hint">Stored only in this app's local storage on this device — other sites cannot
+    read it. Requests go directly from your browser to api.anthropic.com.</p>
 
   <label class="field">Model
     <select id="chat-set-model">
