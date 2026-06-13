@@ -14,6 +14,11 @@ export const DEFAULT_SETTINGS = {
   installedLibs: [],
   activeProjectId: null,
   driveFolderId: null,
+  anthropicApiKey: '',
+  chatModel: 'claude-sonnet-4-6',
+  chatMaxTokens: 4096,
+  chatSendSnapshot: true,
+  chatSystemPrompt: null, // null -> DEFAULT_SYSTEM_PROMPT in chat.js
 };
 
 function read(key, fallback) {

@@ -101,6 +101,22 @@ export function fitView() {
   controls.update();
 }
 
+// JPEG snapshot of the current view for the AI chat (base64, no data: prefix).
+// Renders synchronously first because the WebGL buffer is cleared after each
+// frame (no preserveDrawingBuffer), then downscales onto a 2D canvas.
+export function captureSnapshot(maxDim = 768) {
+  if (!mesh || !renderer) return null;
+  renderer.render(scene, camera);
+  const src = renderer.domElement;
+  const scale = Math.min(1, maxDim / Math.max(src.width, src.height));
+  const out = document.createElement('canvas');
+  out.width = Math.max(1, Math.round(src.width * scale));
+  out.height = Math.max(1, Math.round(src.height * scale));
+  out.getContext('2d').drawImage(src, 0, 0, out.width, out.height);
+  const dataUrl = out.toDataURL('image/jpeg', 0.8);
+  return { mediaType: 'image/jpeg', data: dataUrl.slice(dataUrl.indexOf(',') + 1) };
+}
+
 export function getMeshStats() {
   if (!mesh) return null;
   return { triangles: mesh.geometry.getAttribute('position').count / 3 };

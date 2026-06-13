@@ -30,12 +30,14 @@ js/projects.js     project CRUD dialog + active-project lifecycle
 js/libraries.js    curated lib picker (vendored zips) + custom URL -> IndexedDB
 js/export.js       STL render -> showSaveFilePicker / <a download> / Drive upload
 js/gdrive.js       Google Identity Services token client + Drive REST v3 + sync
-js/settings.js     settings dialog (backend, quality, Client ID, storage)
+js/settings.js     settings dialog (backend, quality, Client ID, Anthropic key, storage)
 js/ui.js           tabs, dialogs, toasts, console log panel, status dot
+js/chat.js         AI Chat tab: Anthropic SDK (lazy-imported), streams replies, applies code
 sw.js              service worker: cache-first app shell, tolerant wasm precache
 vendor/openscad/   openscad.js + openscad.wasm (see "Provenance" below)
 vendor/three/      three.module.js, three.core.js, OrbitControls.js, STLLoader.js
 vendor/fflate/     fflate.module.js (unzip, used in the worker)
+vendor/anthropic/  Anthropic TS SDK .mjs dist (see "Provenance" below)
 vendor/libraries/  curated zips: BOSL2, BOSL, MCAD, NopSCADlib, funcutils, fonts
 examples/default.scad  first-run demo project (parametric rounded box)
 ```
@@ -90,6 +92,17 @@ curated zips (from openscad-playground's npm dist) have files at the zip root.
   `examples/jsm/loaders/STLLoader.js`. The addons import bare `'three'`, resolved by the
   import map in index.html.
 - `vendor/fflate/fflate.module.js`: npm `fflate@0.8.3` `esm/browser.js`.
+- `vendor/anthropic/`: all `*.mjs` files from npm `@anthropic-ai/sdk` (version recorded in
+  `vendor/anthropic/VERSION`) — the ESM dist uses only relative imports, so it runs
+  unbundled in the browser. **One patch**: `resources/beta/webhooks.mjs` imports the npm
+  package `standardwebhooks` (Node-only signature verification); that import is rewritten
+  to the local `standardwebhooks-stub.mjs`. Re-apply the patch when upgrading the SDK.
+  The remaining `node:` imports in the tree are all *dynamic* (credential-chain paths
+  that never run when an `apiKey` is passed) so they're harmless in the browser.
+  `js/chat.js` imports the SDK lazily (dynamic import on first send) so the app shell
+  still boots offline — the SDK files are NOT in the SW precache; the cache-first fetch
+  handler back-fills them on first use. The SW never intercepts `api.anthropic.com`
+  (cross-origin requests pass through).
 
 To upgrade OpenSCAD: pull a newer playground npm release or files.openscad.org snapshot,
 replace `vendor/openscad/*`, re-run the test recipes below.
