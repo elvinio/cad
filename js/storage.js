@@ -18,7 +18,7 @@ export const DEFAULT_SETTINGS = {
   chatModel: 'claude-sonnet-4-6',
   chatMaxTokens: 4096,
   chatSendSnapshot: true,
-  chatAutoApply: false, // false -> review code in a diff dialog before applying
+  chatMaxTurns: 10,     // safety cap on the agentic apply-and-render tool loop
   chatSystemPrompt: null, // null -> DEFAULT_SYSTEM_PROMPT in chat.js
 };
 
