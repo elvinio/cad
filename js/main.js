@@ -3,7 +3,7 @@
 import { subscribe } from './state.js';
 import { initUI, toast } from './ui.js';
 import { initViewer, fitView } from './viewer.js';
-import { initEditor, getCode, setCode } from './editor.js';
+import { initEditor, getCode, setCode, clearHistory, canUndo, canRedo, undo, redo } from './editor.js';
 import { initCustomizer, getParamValues, setParamValues } from './customizer.js';
 import { initProjects, loadInitialProject, renderList as renderProjects,
          updateActiveCode, updateActiveParams } from './projects.js';
@@ -24,7 +24,13 @@ async function boot() {
 
   initUI();
   initViewer($('viewer-canvas'));
-  initEditor($('editor'), { onChange: updateActiveCode });
+  function syncUndoRedoBtns() {
+    $('undo-btn').disabled = !canUndo();
+    $('redo-btn').disabled = !canRedo();
+  }
+  initEditor($('editor'), { onChange: updateActiveCode, onUndoRedoStateChange: syncUndoRedoBtns });
+  $('undo-btn').addEventListener('click', undo);
+  $('redo-btn').addEventListener('click', redo);
   initCustomizer($('customizer-form'), { onValuesChanged: updateActiveParams });
   initProjects({
     dialog: $('projects-dialog'),
@@ -81,6 +87,7 @@ async function boot() {
   subscribe('settings:changed', () => requestRender('settings'));
   subscribe('libs:changed', () => requestRender('settings'));
   subscribe('project:changed', ({ project }) => {
+    clearHistory();
     setCode(project.code);
     setParamValues(project.paramValues);
     requestRender('project');

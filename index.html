@@ -46,6 +46,10 @@
       <button class="tab" data-tab="chat-view">Chat</button>
     </nav>
     <div id="code-view" class="tab-view active">
+      <div class="code-toolbar">
+        <button id="undo-btn" class="icon-btn" title="Undo (Ctrl+Z)" disabled>&#8617;</button>
+        <button id="redo-btn" class="icon-btn" title="Redo (Ctrl+Y)" disabled>&#8618;</button>
+      </div>
       <textarea id="editor" spellcheck="false" autocapitalize="off" autocomplete="off"
         autocorrect="off" placeholder="// OpenSCAD code&#10;cube(10);"></textarea>
     </div>
