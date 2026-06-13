@@ -31,6 +31,7 @@ Rules:
 - Prefer small edit_code edits over rewriting the whole file.
 - Keep the code valid OpenSCAD (units are millimetres). Preserve the user's Customizer parameters (top-level variables with their // [min:max] annotations and // descriptions) unless asked to change them; tweak values with set_params rather than editing the annotations. For new models, expose the key dimensions as such top-level variables so the result is parametric.
 - Don't guess library argument names — call lookup_lib first. Confirm a finished shape with look before declaring it done.
+- Render results may include an "OpenSCAD messages" section — read it. Fix the cause of any WARNING/DEPRECATED (e.g. undefined variable, deprecated call) even if the model still compiled. Renders that fall back to the slower CGAL backend usually mean a pathological shape (e.g. hull() of many spheres at high $fn) — simplify it.
 - Keep explanations brief — the user is on a phone.
 - If a request is ambiguous, make a sensible choice and note it briefly rather than asking questions.`;
 
@@ -522,17 +523,37 @@ function displayToolUse({ name, input }) {
 function awaitRender(trigger) {
   return new Promise((resolve) => {
     let settled = false;
+    const logs = [];
+    const offLog = subscribe('render:log', (m) => { const l = (m?.line ?? '').trim(); if (l) logs.push(l); });
     const finish = (res) => {
       if (settled) return;
       settled = true;
-      offDone(); offErr(); clearTimeout(timer);
-      resolve(res);
+      offDone(); offErr(); offLog(); clearTimeout(timer);
+      resolve({ ...res, logs });
     };
     const offDone = subscribe('render:done', (p) => finish({ ok: true, elapsedMs: p.elapsedMs }));
     const offErr = subscribe('render:error', (p) => finish({ ok: false, error: p.message }));
     const timer = setTimeout(() => finish({ ok: false, error: 'Render timed out after 90s.' }), 90000);
     trigger();
   });
+}
+
+// OpenSCAD prints "Could not initialize localization" on every run (harmless).
+const LOG_NOISE = /Could not initialize localization/i;
+
+// Pull the warnings/errors worth showing the model out of a render's log lines:
+// deduped, capped, noise filtered. Surfaced on success too (e.g. deprecated
+// calls or undefined-variable warnings that compiled anyway) so it can fix them.
+function notableLogs(logs) {
+  const seen = new Set();
+  const out = [];
+  for (const l of logs || []) {
+    if (!/\b(WARNING|ERROR|DEPRECATED)\b/i.test(l) || LOG_NOISE.test(l) || seen.has(l)) continue;
+    seen.add(l);
+    out.push(l);
+    if (out.length >= 8) break;
+  }
+  return out;
 }
 
 const applyAndAwaitRender = (code) => awaitRender(() => applyCode(code));
@@ -546,11 +567,13 @@ function dimsLine() {
 
 // Text tool_result after an apply/param change (no image — the model uses look).
 function renderResultText(res) {
+  const notes = notableLogs(res.logs);
+  const msgBlock = notes.length ? `\nOpenSCAD messages:\n${notes.map(l => `  ${l}`).join('\n')}` : '';
   if (!res.ok) {
     addNote(`Render failed: ${res.error}`, true);
-    return `Render failed: ${res.error}\nFix the problem and try again.`;
+    return `Render failed: ${res.error}${msgBlock}\nFix the problem and try again.`;
   }
-  return `Render OK. Bounding box ${dimsLine()}. Call look to see the model.`;
+  return `Render OK. Bounding box ${dimsLine()}.${msgBlock}\nCall look to see the model.`;
 }
 
 function runReadCode(input) {
