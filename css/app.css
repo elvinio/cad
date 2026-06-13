@@ -147,6 +147,8 @@ body {
   touch-action: manipulation;
 }
 .view-presets button:active { background: var(--accent); color: #1a1a2e; }
+/* Display-mode toggle sits in the same row but reads as a distinct control. */
+#display-mode-btn { margin-right: 6px; min-width: 56px; }
 
 #viewer-panel.maximized {
   position: fixed;

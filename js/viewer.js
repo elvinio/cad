@@ -9,6 +9,21 @@ let renderer, scene, camera, controls, mesh, grid, highlightMesh;
 let firstFit = true;
 let meshStats = null; // { triangles, size:[dx,dy,dz] } for the current mesh
 
+// Display mode for the model material. Persists across re-renders (each render
+// builds a fresh material in setGeometry, so the mode is re-applied there).
+const DISPLAY_MODES = ['solid', 'wireframe', 'ghost'];
+let displayMode = 'solid';
+
+// Mutate a model material to reflect the current display mode. Solid = opaque
+// flat-shaded; wireframe = edges only; ghost = translucent see-through skin.
+function applyDisplayMode(material) {
+  material.wireframe = displayMode === 'wireframe';
+  material.transparent = displayMode === 'ghost';
+  material.opacity = displayMode === 'ghost' ? 0.35 : 1;
+  material.depthWrite = displayMode !== 'ghost';
+  material.needsUpdate = true;
+}
+
 export function initViewer(canvas) {
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -85,6 +100,7 @@ function setGeometry(geometry) {
     side: THREE.DoubleSide,
     vertexColors: hasVertexColors,
   });
+  applyDisplayMode(material);
   mesh = new THREE.Mesh(geometry, material);
   scene.add(mesh);
 
@@ -170,6 +186,16 @@ export function setView(name) {
     ? new THREE.Vector3(0, 1, 0)
     : new THREE.Vector3(0, 0, 1);
   frameFrom(new THREE.Vector3(v[0], v[1], v[2]), up);
+}
+
+// Advance to the next display mode (solid -> wireframe -> ghost -> solid) and
+// re-apply it to the live material. Returns the new mode so the UI can relabel
+// the toggle button.
+export function cycleDisplayMode() {
+  const next = (DISPLAY_MODES.indexOf(displayMode) + 1) % DISPLAY_MODES.length;
+  displayMode = DISPLAY_MODES[next];
+  if (mesh) applyDisplayMode(mesh.material);
+  return displayMode;
 }
 
 // JPEG snapshot of the current view for the AI chat (base64, no data: prefix).
