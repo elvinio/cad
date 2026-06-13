@@ -59,17 +59,58 @@ async function getClient() {
 
 // ---------- message rendering ----------
 
-// Minimal markdown-ish renderer: fenced code blocks become <pre>, the rest is
-// plain text (textContent — no HTML injection).
+// Input/output price per million tokens, used for the per-message cost estimate.
+const MODEL_PRICING = {
+  'claude-sonnet-4-6': { in: 3, out: 15 },
+  'claude-haiku-4-5':  { in: 1, out: 5 },
+};
+
+function formatTimestamp(ts) {
+  // e.g. "Jun 13, 2026, 4:13 AM" — date and time, locale-formatted.
+  return new Date(ts).toLocaleString([], {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+  });
+}
+
+function estimateCostUsd(model, usage) {
+  const p = MODEL_PRICING[model];
+  if (!p || !usage) return null;
+  return (usage.input_tokens * p.in + usage.output_tokens * p.out) / 1e6;
+}
+
+// Bottom-of-message stats line: time taken · tokens · estimated USD cost.
+function formatStats({ model, durationMs, usage } = {}) {
+  const parts = [];
+  if (durationMs != null) parts.push(`${(durationMs / 1000).toFixed(1)}s`);
+  if (usage) parts.push(`${usage.input_tokens} in / ${usage.output_tokens} out tok`);
+  const cost = estimateCostUsd(model, usage);
+  if (cost != null) parts.push(`~$${cost.toFixed(4)}`);
+  return parts.join(' · ');
+}
+
+// Open the code-artifact modal with the given code.
+function showCodeArtifact(code) {
+  $('chat-code-content').textContent = code;
+  $('chat-code-dialog').showModal();
+}
+
+// Minimal markdown-ish renderer: fenced code blocks are hidden behind a "code
+// artifact" button (opens a modal); the rest is plain text (textContent — no
+// HTML injection).
 function renderMessageBody(el, text) {
   el.textContent = '';
   const parts = text.split(/```[a-zA-Z]*\n?/);
   parts.forEach((part, i) => {
     if (!part) return;
     if (i % 2 === 1) {
-      const pre = document.createElement('pre');
-      pre.textContent = part.replace(/\n$/, '');
-      el.appendChild(pre);
+      const code = part.replace(/\n$/, '');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chat-code-btn';
+      btn.textContent = '📄 View code artifact';
+      btn.addEventListener('click', () => showCodeArtifact(code));
+      el.appendChild(btn);
     } else {
       const p = document.createElement('div');
       p.textContent = part;
@@ -78,21 +119,46 @@ function renderMessageBody(el, text) {
   });
 }
 
-function addBubble(role, text, { withSnapshot = false } = {}) {
+// Render one full-width message: timestamp on top, body, then (for assistant
+// turns) a stats footer. Returns the message element; the body is queryable via
+// `.chat-msg-body` for streaming updates.
+function addBubble(role, text, { withSnapshot = false, ts = Date.now(), meta = null } = {}) {
   $('chat-empty-hint')?.remove();
   const container = $('chat-messages');
-  const bubble = document.createElement('div');
-  bubble.className = `chat-msg ${role}`;
-  renderMessageBody(bubble, text);
+  const msg = document.createElement('div');
+  msg.className = `chat-msg ${role}`;
+
+  const time = document.createElement('div');
+  time.className = 'chat-msg-time';
+  time.textContent = formatTimestamp(ts);
+  msg.appendChild(time);
+
+  const body = document.createElement('div');
+  body.className = 'chat-msg-body';
+  renderMessageBody(body, text);
+  msg.appendChild(body);
+
   if (withSnapshot) {
     const tag = document.createElement('span');
     tag.className = 'chat-snapshot-tag';
     tag.textContent = '📷 snapshot attached';
-    bubble.appendChild(tag);
+    body.appendChild(tag);
   }
-  container.appendChild(bubble);
+
+  if (meta) setBubbleStats(msg, meta);
+
+  container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
-  return bubble;
+  return msg;
+}
+
+// Add or replace the stats footer on a message element.
+function setBubbleStats(msg, meta) {
+  msg.querySelector('.chat-msg-stats')?.remove();
+  const stats = document.createElement('div');
+  stats.className = 'chat-msg-stats';
+  stats.textContent = formatStats(meta);
+  msg.appendChild(stats);
 }
 
 function addNote(text, isError = false) {
@@ -150,11 +216,14 @@ async function send() {
     userText = `<current_code>\n${code}\n</current_code>\n\n${prompt}`;
     lastCodeSeenByModel = code;
   }
-  history.push({ role: 'user', content: userText });
+  const userTs = Date.now();
+  history.push({ role: 'user', content: userText, ts: userTs });
 
   const snapshot = settings.chatSendSnapshot ? captureSnapshot() : null;
-  addBubble('user', prompt, { withSnapshot: !!snapshot });
+  addBubble('user', prompt, { withSnapshot: !!snapshot, ts: userTs });
   const assistantBubble = addBubble('assistant', '…');
+  const assistantBody = assistantBubble.querySelector('.chat-msg-body');
+  const startedAt = Date.now();
 
   // History is text-only; attach the snapshot to the outgoing message only.
   const messages = history.map(m => ({ role: m.role, content: m.content }));
@@ -179,14 +248,20 @@ async function send() {
     let accumulated = '';
     stream.on('text', (delta) => {
       accumulated += delta;
-      renderMessageBody(assistantBubble, accumulated);
+      renderMessageBody(assistantBody, accumulated);
       $('chat-messages').scrollTop = $('chat-messages').scrollHeight;
     });
 
     const final = await stream.finalMessage();
     const text = final.content.filter(b => b.type === 'text').map(b => b.text).join('');
-    history.push({ role: 'assistant', content: text });
-    renderMessageBody(assistantBubble, text);
+    const meta = {
+      model: settings.chatModel,
+      durationMs: Date.now() - startedAt,
+      usage: { input_tokens: final.usage.input_tokens, output_tokens: final.usage.output_tokens },
+    };
+    history.push({ role: 'assistant', content: text, ts: Date.now(), meta });
+    renderMessageBody(assistantBody, text);
+    setBubbleStats(assistantBubble, meta);
 
     if (final.stop_reason === 'max_tokens') {
       addNote('Reply was cut off by the max-token budget — no code was applied. '
@@ -198,8 +273,6 @@ async function send() {
         addNote('Code updated — rendering…');
       }
     }
-    const u = final.usage;
-    addNote(`${settings.chatModel} · ${u.input_tokens} in / ${u.output_tokens} out tokens`);
     persistCurrentSession();
   } catch (e) {
     history.pop(); // drop the failed user turn so a retry resends it cleanly
@@ -244,7 +317,9 @@ function renderHistoryToUI() {
   const container = $('chat-messages');
   container.textContent = '';
   if (!history.length) { showEmptyHint(); return; }
-  for (const m of history) addBubble(m.role, displayText(m.content));
+  for (const m of history) {
+    addBubble(m.role, displayText(m.content), { ts: m.ts ?? Date.now(), meta: m.meta ?? null });
+  }
 }
 
 // Write the in-memory conversation back to localStorage (no-op when empty).
@@ -274,7 +349,7 @@ function newChat() {
 // Continue a saved conversation (archives the current one first).
 function loadSession(sess) {
   persistCurrentSession();
-  history = sess.messages.map(m => ({ role: m.role, content: m.content }));
+  history = sess.messages.map(m => ({ role: m.role, content: m.content, ts: m.ts, meta: m.meta }));
   lastCodeSeenByModel = sess.lastCodeSeenByModel ?? null;
   currentSessionId = sess.id;
   currentSessionCreated = sess.created;
@@ -290,7 +365,7 @@ function onProjectChanged({ project }) {
   const sessions = getChatSessions(currentProjectId);
   if (sessions.length) {
     const s = sessions[0];
-    history = s.messages.map(m => ({ role: m.role, content: m.content }));
+    history = s.messages.map(m => ({ role: m.role, content: m.content, ts: m.ts, meta: m.meta }));
     lastCodeSeenByModel = s.lastCodeSeenByModel ?? null;
     currentSessionId = s.id;
     currentSessionCreated = s.created;
@@ -419,6 +494,14 @@ export function initChat() {
     saveSettings({ chatSendSnapshot: e.target.checked }));
   $('chat-preview-btn').addEventListener('click', showPreview);
   $('chat-preview-copy').addEventListener('click', copyPreview);
+  $('chat-code-copy').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText($('chat-code-content').textContent);
+      toast('Code copied to clipboard');
+    } catch (e) {
+      toast(`Copy failed: ${e.message}`, 'error');
+    }
+  });
   $('chat-history-btn').addEventListener('click', () => {
     renderHistoryList();
     $('chat-history-dialog').showModal();
