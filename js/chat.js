@@ -9,6 +9,7 @@ import { getCode, setCode } from './editor.js';
 import { updateActiveCode } from './projects.js';
 import { captureSnapshot } from './viewer.js';
 import { toast } from './ui.js';
+import { diffLines } from './util/linediff.js';
 
 export const DEFAULT_SYSTEM_PROMPT =
 `You are an expert CAD designer working inside ScadPad, a mobile OpenSCAD editor. The user's current OpenSCAD code is provided in <current_code> tags. Work from that code to achieve what the user needs.
@@ -187,6 +188,27 @@ function applyCode(code) {
   emit('code:changed', { code, immediate: true });
 }
 
+// Pending proposal awaiting the user's Apply/Discard choice (review mode).
+let pendingApplyCode = null;
+
+// Render a unified line diff into the apply dialog and open it. The user's
+// editor is untouched until they tap Apply. Note: lastCodeSeenByModel is NOT
+// advanced here — only applyCode() does that — so a discarded proposal still
+// re-sends <current_code> on the next turn.
+function openApplyDialog(oldCode, newCode) {
+  pendingApplyCode = newCode;
+  const diff = $('chat-apply-diff');
+  diff.textContent = '';
+  for (const row of diffLines(oldCode, newCode)) {
+    const span = document.createElement('span');
+    span.className = `diff-${row.type}`;
+    const sign = row.type === 'add' ? '+' : row.type === 'del' ? '-' : ' ';
+    span.textContent = `${sign} ${row.text}\n`;
+    diff.appendChild(span);
+  }
+  $('chat-apply-dialog').showModal();
+}
+
 // ---------- send ----------
 
 async function send() {
@@ -269,8 +291,12 @@ async function send() {
     } else {
       const newCode = extractCodeBlock(text);
       if (newCode && newCode !== code) {
-        applyCode(newCode);
-        addNote('Code updated — rendering…');
+        if (settings.chatAutoApply) {
+          applyCode(newCode);
+          addNote('Code updated — rendering…');
+        } else {
+          openApplyDialog(code, newCode);
+        }
       }
     }
     persistCurrentSession();
@@ -507,10 +533,28 @@ export function initChat() {
     $('chat-history-dialog').showModal();
   });
 
+  // ----- Apply-confirm dialog (review mode) -----
+  $('chat-apply-confirm').addEventListener('click', () => {
+    $('chat-apply-dialog').close();
+    if (pendingApplyCode != null) {
+      applyCode(pendingApplyCode);
+      pendingApplyCode = null;
+      addNote('Code updated — rendering…');
+    }
+  });
+  $('chat-apply-discard').addEventListener('click', () => {
+    $('chat-apply-dialog').close();
+    pendingApplyCode = null;
+    addNote('Change discarded.');
+  });
+
   // ----- Chat settings dialog -----
   $('set-anthropic-key').value = settings.anthropicApiKey;
   $('set-anthropic-key').addEventListener('change', e =>
     saveSettings({ anthropicApiKey: e.target.value.trim() }));
+  $('chat-set-auto-apply').checked = settings.chatAutoApply;
+  $('chat-set-auto-apply').addEventListener('change', e =>
+    saveSettings({ chatAutoApply: e.target.checked }));
   $('chat-set-max-tokens').value = settings.chatMaxTokens;
   $('chat-set-system').value = getSystemPrompt();
 

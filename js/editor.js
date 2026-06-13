@@ -3,6 +3,9 @@
 import { emit } from './state.js';
 
 let textarea;
+let gutter;
+let errorLines = new Set();
+let gutterLineCount = -1;
 let onChange = () => {};
 let onUndoRedoStateChange = () => {};
 
@@ -23,9 +26,47 @@ function pushHistory(code) {
 function applyHistory(code) {
   if (!textarea) return;
   textarea.value = code;
+  buildGutter();
   onChange(code);
   emit('code:changed', { code, immediate: true });
   onUndoRedoStateChange();
+}
+
+// --- Line-number gutter ---
+
+// Rebuild the gutter rows to match the textarea's line count. Each row is a
+// div whose line metrics match #editor exactly (shared CSS) so numbers align.
+// Error rows get an .err class and are clickable → jumpToLine.
+function buildGutter(force = false) {
+  if (!gutter || !textarea) return;
+  const count = textarea.value.split('\n').length;
+  if (!force && count === gutterLineCount) return;
+  gutterLineCount = count;
+  const frag = document.createDocumentFragment();
+  for (let n = 1; n <= count; n++) {
+    const row = document.createElement('div');
+    row.className = 'gutter-row';
+    row.textContent = n;
+    if (errorLines.has(n)) {
+      row.classList.add('err');
+      row.title = `Error on line ${n} — click to jump`;
+      row.addEventListener('click', () => jumpToLine(n));
+    }
+    frag.appendChild(row);
+  }
+  gutter.textContent = '';
+  gutter.appendChild(frag);
+}
+
+export function setErrorLines(lineNos) {
+  errorLines = new Set(lineNos.filter(n => Number.isFinite(n)));
+  buildGutter(true);
+}
+
+export function clearErrorLines() {
+  if (!errorLines.size) return;
+  errorLines = new Set();
+  buildGutter(true);
 }
 
 export function canUndo() { return undoIndex > 0; }
@@ -56,15 +97,23 @@ export function clearHistory() {
 
 export function initEditor(el, opts = {}) {
   textarea = el;
+  gutter = document.getElementById('editor-gutter');
   onChange = opts.onChange || onChange;
   onUndoRedoStateChange = opts.onUndoRedoStateChange || onUndoRedoStateChange;
 
   textarea.addEventListener('input', () => {
+    buildGutter();
     onChange(textarea.value);
     emit('code:changed', { code: textarea.value });
     clearTimeout(pushDebounceTimer);
     pushDebounceTimer = setTimeout(() => pushHistory(textarea.value), 1000);
   });
+
+  // Keep the gutter scrolled in lockstep with the textarea.
+  textarea.addEventListener('scroll', () => {
+    if (gutter) gutter.scrollTop = textarea.scrollTop;
+  });
+  buildGutter(true);
 
   textarea.addEventListener('keydown', (e) => {
     if (e.key === 'Tab') {
@@ -113,6 +162,7 @@ export function getCode() {
 export function setCode(code) {
   if (textarea) {
     textarea.value = code;
+    buildGutter();
     pushHistory(code);
   }
 }

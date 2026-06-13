@@ -2,7 +2,7 @@
 
 import { subscribe } from './state.js';
 import { initUI, toast } from './ui.js';
-import { initViewer, fitView } from './viewer.js';
+import { initViewer, fitView, setView } from './viewer.js';
 import { initEditor, getCode, setCode, clearHistory, canUndo, canRedo, undo, redo, insertText } from './editor.js';
 import { initCustomizer, getParamValues, setParamValues } from './customizer.js';
 import { initProjects, loadInitialProject, renderList as renderProjects,
@@ -88,6 +88,10 @@ async function boot() {
     }
   });
   $('reset-view-btn').addEventListener('click', fitView);
+  $('view-presets').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-view]');
+    if (btn) setView(btn.dataset.view);
+  });
 
   // Wiring: edits and settings changes trigger renders
   subscribe('code:changed', ({ immediate }) => requestRender(immediate ? 'project' : 'code'));

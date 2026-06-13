@@ -35,6 +35,12 @@
     <div id="viewer-overlay"></div>
     <button id="reset-view-btn" class="icon-btn overlay-btn" title="Reset view">&#8634;</button>
     <button id="maximize-btn" class="icon-btn overlay-btn" title="Maximize viewer">&#x26F6;</button>
+    <div id="view-presets" class="view-presets">
+      <button data-view="top" title="Top view">Top</button>
+      <button data-view="front" title="Front view">Front</button>
+      <button data-view="right" title="Right view">Right</button>
+      <button data-view="iso" title="Isometric view">Iso</button>
+    </div>
   </section>
 
   <section id="bottom-panel">
@@ -64,8 +70,11 @@
           <button class="key-btn" data-key="-">-</button>
         </div>
       </div>
-      <textarea id="editor" spellcheck="false" autocapitalize="off" autocomplete="off"
-        autocorrect="off" placeholder="// OpenSCAD code&#10;cube(10);"></textarea>
+      <div class="editor-wrap">
+        <div id="editor-gutter" class="editor-gutter" aria-hidden="true"></div>
+        <textarea id="editor" spellcheck="false" autocapitalize="off" autocomplete="off"
+          autocorrect="off" wrap="off" placeholder="// OpenSCAD code&#10;cube(10);"></textarea>
+      </div>
     </div>
     <div id="customizer-view" class="tab-view">
       <div id="customizer-form"><p class="hint">Render once to extract parameters.</p></div>
@@ -213,6 +222,10 @@
 
   <p class="hint">The model and the snapshot toggle now live on the Chat panel toolbar.</p>
 
+  <label class="field checkbox"><input id="chat-set-auto-apply" type="checkbox">
+    Auto-apply code from Claude (skip the review dialog)</label>
+  <p class="hint">Off by default: you review a diff and tap Apply before the editor is overwritten.</p>
+
   <label class="field">Max tokens per reply
     <input id="chat-set-max-tokens" type="number" min="256" max="16000" step="256" value="4096">
   </label>
@@ -241,6 +254,17 @@
     <button id="chat-preview-copy">&#128203; Copy to clipboard</button>
   </div>
   <form method="dialog"><button class="close-btn">Close</button></form>
+</dialog>
+
+<!-- Review code from Claude before applying -->
+<dialog id="chat-apply-dialog">
+  <h2>Apply code from Claude?</h2>
+  <p class="hint">Review the changes below. Applying replaces your editor contents and re-renders.</p>
+  <pre id="chat-apply-diff" class="diff"></pre>
+  <div class="dialog-actions">
+    <button id="chat-apply-confirm" class="primary">Apply</button>
+    <button id="chat-apply-discard">Discard</button>
+  </div>
 </dialog>
 
 <!-- Code artifact viewer -->
