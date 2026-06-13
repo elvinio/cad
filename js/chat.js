@@ -36,7 +36,7 @@ function getSystemPrompt() {
 async function getClient() {
   const { anthropicApiKey } = getSettings();
   if (!anthropicApiKey) {
-    throw new Error('No Anthropic API key set — add one in Settings.');
+    throw new Error('No Anthropic API key set — add one in Chat settings.');
   }
   if (!sdkClientPromise) {
     sdkClientPromise = import('../vendor/anthropic/index.mjs')
@@ -235,6 +235,9 @@ export function initChat() {
 
   // ----- Chat settings dialog -----
   const settings = getSettings();
+  $('set-anthropic-key').value = settings.anthropicApiKey;
+  $('set-anthropic-key').addEventListener('change', e =>
+    saveSettings({ anthropicApiKey: e.target.value.trim() }));
   $('chat-set-model').value = settings.chatModel;
   $('chat-set-max-tokens').value = settings.chatMaxTokens;
   $('chat-set-snapshot').checked = settings.chatSendSnapshot;

@@ -26,7 +26,6 @@ export function initSettings() {
   $('set-fs').value = settings.custom.fs;
   $('set-final-export').checked = settings.finalQualityExport;
   $('set-client-id').value = settings.googleClientId;
-  $('set-anthropic-key').value = settings.anthropicApiKey;
   $('set-folder-id').value = settings.driveFolderId || '';
   $('custom-quality').hidden = settings.quality !== 'custom';
 
@@ -53,8 +52,6 @@ export function initSettings() {
     save({ finalQualityExport: e.target.checked }));
   $('set-client-id').addEventListener('change', e =>
     save({ googleClientId: e.target.value.trim() }));
-  $('set-anthropic-key').addEventListener('change', e =>
-    saveSettings({ anthropicApiKey: e.target.value.trim() }));
   $('set-folder-id').addEventListener('change', e =>
     save({ driveFolderId: e.target.value.trim() || null }));
 
