@@ -203,6 +203,35 @@ body {
 }
 .code-toolbar .icon-btn:disabled:active { background: none; }
 
+.key-bar {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 4px;
+  margin-left: 6px;
+  padding-left: 6px;
+  border-left: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.key-bar::-webkit-scrollbar { display: none; }
+.key-bar .key-btn {
+  flex: none;
+  min-width: 32px;
+  height: 30px;
+  padding: 0 6px;
+  font-family: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+  font-size: 16px;
+  line-height: 1;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.key-bar .key-btn:active { background: var(--border); }
+
 #code-view #editor {
   flex: 1;
   height: auto;
@@ -246,20 +275,40 @@ body {
 }
 .param {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 4px;
-  margin: 10px 0;
-}
-.param label { font-size: 13px; color: var(--fg); }
-.param .desc { font-size: 11px; color: var(--muted); }
-.param-row {
-  display: flex;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) auto;
   gap: 8px;
   align-items: center;
+  margin: 8px 0;
 }
-.param input[type=range] { flex: 1; accent-color: var(--accent); }
-.param input[type=number] { width: 84px; }
-.param input[type=text], .param select { width: 100%; }
+.param .param-name {
+  font-size: 13px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.param .desc { font-size: 11px; color: var(--muted); }
+.param .param-field { width: 100%; min-width: 0; }
+.param .param-field--wide { grid-column: 2 / 4; }
+.param input[type=checkbox].param-field { width: auto; justify-self: start; }
+.param-stepper {
+  display: flex;
+  gap: 4px;
+}
+.param-stepper .step-btn {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.param-stepper .step-btn:active { background: var(--border); }
 
 input[type=text], input[type=number], input[type=url], select {
   background: var(--panel-alt);

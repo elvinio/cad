@@ -97,6 +97,15 @@ export function initEditor(el, opts = {}) {
   pushHistory(textarea.value || '');
 }
 
+// Insert a snippet at the caret (or over the selection) without losing focus —
+// used by the on-screen key bar to supplement the soft keyboard on mobile.
+export function insertText(text) {
+  if (!textarea) return;
+  textarea.focus();
+  textarea.setRangeText(text, textarea.selectionStart, textarea.selectionEnd, 'end');
+  textarea.dispatchEvent(new Event('input'));
+}
+
 export function getCode() {
   return textarea ? textarea.value : '';
 }
