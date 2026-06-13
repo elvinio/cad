@@ -3,7 +3,7 @@
 import { subscribe } from './state.js';
 import { initUI, toast } from './ui.js';
 import { initViewer, fitView } from './viewer.js';
-import { initEditor, getCode, setCode, clearHistory, canUndo, canRedo, undo, redo } from './editor.js';
+import { initEditor, getCode, setCode, clearHistory, canUndo, canRedo, undo, redo, insertText } from './editor.js';
 import { initCustomizer, getParamValues, setParamValues } from './customizer.js';
 import { initProjects, loadInitialProject, renderList as renderProjects,
          updateActiveCode, updateActiveParams } from './projects.js';
@@ -31,6 +31,14 @@ async function boot() {
   initEditor($('editor'), { onChange: updateActiveCode, onUndoRedoStateChange: syncUndoRedoBtns });
   $('undo-btn').addEventListener('click', undo);
   $('redo-btn').addEventListener('click', redo);
+  // Insert common coding chars at the caret. mousedown + preventDefault keeps the
+  // textarea focused (and the soft keyboard open) instead of blurring on tap.
+  $('key-bar').addEventListener('mousedown', (e) => {
+    const btn = e.target.closest('button[data-key]');
+    if (!btn) return;
+    e.preventDefault();
+    insertText(btn.dataset.key);
+  });
   initCustomizer($('customizer-form'), { onValuesChanged: updateActiveParams });
   initProjects({
     dialog: $('projects-dialog'),

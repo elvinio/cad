@@ -92,12 +92,45 @@ function currentValue(param) {
   return param.name in values ? values[param.name] : param.initial;
 }
 
+// Step a number input by ±step, clamp to min/max, commit the new value.
+function adjustNumber(num, param, dir) {
+  const step = param.step !== undefined && param.step !== '' ? Number(param.step) : 1;
+  let v = Number(num.value);
+  if (!Number.isFinite(v)) v = Number(param.initial) || 0;
+  v += dir * step;
+  if (param.min !== undefined) v = Math.max(Number(param.min), v);
+  if (param.max !== undefined) v = Math.min(Number(param.max), v);
+  // Avoid binary-float dust by rounding to the step's decimal precision.
+  const dp = (String(step).split('.')[1] || '').length;
+  v = Number(v.toFixed(dp));
+  num.value = v;
+  setValue(param.name, v, param.initial);
+}
+
+function buildStepper(num, param) {
+  const div = document.createElement('div');
+  div.className = 'param-stepper';
+  for (const [sign, dir] of [['−', -1], ['+', 1]]) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'step-btn';
+    btn.textContent = sign;
+    btn.title = (dir < 0 ? 'Decrease ' : 'Increase ') + (param.caption || param.name);
+    btn.addEventListener('click', () => adjustNumber(num, param, dir));
+    div.appendChild(btn);
+  }
+  return div;
+}
+
+// 3-column row: [variable name] [text field] [ − + stepper ].
 function buildControl(param) {
   const wrap = document.createElement('div');
   wrap.className = 'param';
 
   const label = document.createElement('label');
+  label.className = 'param-name';
   label.textContent = param.caption || param.name;
+  label.title = param.name;
   wrap.appendChild(label);
 
   const type = param.type;
@@ -105,6 +138,7 @@ function buildControl(param) {
 
   if (Array.isArray(param.options) && param.options.length) {
     const select = document.createElement('select');
+    select.className = 'param-field param-field--wide';
     for (const opt of param.options) {
       const o = document.createElement('option');
       o.value = String(opt.value);
@@ -120,43 +154,25 @@ function buildControl(param) {
   } else if (type === 'boolean') {
     const input = document.createElement('input');
     input.type = 'checkbox';
+    input.className = 'param-field param-field--wide';
     input.checked = !!val;
     input.addEventListener('change', () => setValue(param.name, input.checked, param.initial));
-    label.prepend(input);
-  } else if (type === 'number' && param.min !== undefined && param.max !== undefined) {
-    const row = document.createElement('div');
-    row.className = 'param-row';
-    const range = document.createElement('input');
-    range.type = 'range';
-    range.min = param.min;
-    range.max = param.max;
-    range.step = param.step !== undefined ? param.step : 'any';
-    range.value = val;
+    wrap.appendChild(input);
+  } else if (type === 'number') {
     const num = document.createElement('input');
     num.type = 'number';
-    num.min = param.min;
-    num.max = param.max;
+    num.className = 'param-field';
+    if (param.min !== undefined) num.min = param.min;
+    if (param.max !== undefined) num.max = param.max;
     if (param.step !== undefined) num.step = param.step;
     num.value = val;
-    range.addEventListener('input', () => { num.value = range.value; });
-    range.addEventListener('change', () => setValue(param.name, Number(range.value), param.initial));
-    num.addEventListener('change', () => {
-      range.value = num.value;
-      setValue(param.name, Number(num.value), param.initial);
-    });
-    row.appendChild(range);
-    row.appendChild(num);
-    wrap.appendChild(row);
-  } else if (type === 'number') {
-    const input = document.createElement('input');
-    input.type = 'number';
-    if (param.step !== undefined) input.step = param.step;
-    input.value = val;
-    input.addEventListener('change', () => setValue(param.name, Number(input.value), param.initial));
-    wrap.appendChild(input);
+    num.addEventListener('change', () => adjustNumber(num, param, 0));
+    wrap.appendChild(num);
+    wrap.appendChild(buildStepper(num, param));
   } else {
     const input = document.createElement('input');
     input.type = 'text';
+    input.className = 'param-field param-field--wide';
     if (param.maxLength) input.maxLength = param.maxLength;
     input.value = Array.isArray(val) ? `[${val.join(',')}]` : String(val);
     input.addEventListener('change', () => {
