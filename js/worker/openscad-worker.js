@@ -1,7 +1,7 @@
 // Module worker that owns the OpenSCAD wasm instance.
 // One fresh instance per render job (cancellation = terminate this worker).
 //
-// In:  {type:"render", jobId, source, format:"off"|"binstl"|"param"|"asciistl",
+// In:  {type:"render", jobId, source, format:"off"|"binstl"|"param"|"asciistl"|"csg",
 //       defines:{name:value}, backend:"manifold"|"cgal", libNames:[string]}
 // Out: {type:"log", jobId, stream:"out"|"err", line}
 //      {type:"done", jobId, output:ArrayBuffer, elapsedMs}
@@ -10,7 +10,7 @@
 import { unzipSync } from '../../vendor/fflate/fflate.module.js';
 import { getLibZip } from '../storage.js';
 
-const FORMAT_EXT = { off: 'off', binstl: 'stl', asciistl: 'stl', param: 'json' };
+const FORMAT_EXT = { off: 'off', binstl: 'stl', asciistl: 'stl', param: 'json', csg: 'csg' };
 
 // Unzipped {path -> Uint8Array} maps, kept for the worker's lifetime.
 const unzippedLibs = new Map();

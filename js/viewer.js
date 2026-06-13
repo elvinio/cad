@@ -5,7 +5,7 @@ import { OrbitControls } from 'three/addons/OrbitControls.js';
 import { subscribe, emit } from './state.js';
 import { getSettings } from './storage.js';
 
-let renderer, scene, camera, controls, mesh, grid;
+let renderer, scene, camera, controls, mesh, grid, highlightMesh;
 let firstFit = true;
 let meshStats = null; // { triangles, size:[dx,dy,dz] } for the current mesh
 
@@ -49,6 +49,12 @@ export function initViewer(canvas) {
 
   subscribe('render:done', ({ offText }) => {
     if (offText) setGeometry(parseOFF(offText));
+    // A fresh render clears any previous `#` overlay; if this model still has
+    // highlights a render:highlight event follows and rebuilds it.
+    setHighlight(null);
+  });
+  subscribe('render:highlight', ({ offText }) => {
+    if (offText) setHighlight(parseOFF(offText));
   });
   subscribe('settings:changed', ({ settings }) => {
     if (mesh && !mesh.material.vertexColors) {
@@ -98,6 +104,29 @@ function setGeometry(geometry) {
     fitView();
     firstFit = false;
   }
+}
+
+// Translucent-red overlay for `#`-highlighted geometry. Pass null to clear.
+// depthWrite is off so the overlay reads as a see-through skin — subtracted
+// volumes inside a difference() stay visible through the solid model.
+function setHighlight(geometry) {
+  if (highlightMesh) {
+    scene.remove(highlightMesh);
+    highlightMesh.geometry.dispose();
+    highlightMesh.material.dispose();
+    highlightMesh = null;
+  }
+  if (!geometry) return;
+  const material = new THREE.MeshStandardMaterial({
+    color: 0xff2222,
+    transparent: true,
+    opacity: 0.5,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    flatShading: true,
+  });
+  highlightMesh = new THREE.Mesh(geometry, material);
+  scene.add(highlightMesh);
 }
 
 // Direction vectors for the named camera presets (in OpenSCAD's Z-up frame).

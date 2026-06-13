@@ -3,6 +3,7 @@
 
 import { emit } from './state.js';
 import { getSettings } from './storage.js';
+import { sourceHasHighlight, extractHighlights } from './csg-highlight.js';
 
 const WORKER_URL = new URL('./worker/openscad-worker.js', import.meta.url);
 
@@ -134,15 +135,40 @@ async function doRender() {
       }
     }
 
+    const defines = { ...qualityDefines(settings), ...paramDefines() };
     const res = await runGeometryJob({
-      source, format: 'off',
-      defines: { ...qualityDefines(settings), ...paramDefines() },
+      source, format: 'off', defines,
       backend: settings.backend, libNames: settings.installedLibs,
     });
     emit('render:done', {
       offText: new TextDecoder().decode(res.output),
       elapsedMs: res.elapsedMs,
     });
+
+    // `#`-highlighted geometry: reconstruct a translucent-red overlay. The OFF
+    // above has already discarded the modifier, so detect it via a CSG pass,
+    // extract just the marked subtrees, and re-render those to a mesh. Best
+    // effort — never let it break the main render (which already succeeded).
+    if (sourceHasHighlight(source)) {
+      try {
+        const csg = await runJob({
+          source, format: 'csg', defines,
+          backend: settings.backend, libNames: settings.installedLibs,
+        });
+        const synth = extractHighlights(new TextDecoder().decode(csg.output));
+        if (synth) {
+          const hl = await runGeometryJob({
+            source: synth, format: 'off', defines: {},
+            backend: settings.backend, libNames: settings.installedLibs,
+          });
+          emit('render:highlight', { offText: new TextDecoder().decode(hl.output) });
+        }
+      } catch (e) {
+        if (e.message !== 'cancelled') {
+          emit('render:log', { stream: 'err', line: `WARNING: highlight overlay failed: ${e.message}` });
+        }
+      }
+    }
   } catch (e) {
     if (e.message === 'cancelled') return;
     if (needsParams) pendingNeedsParams = true; // retry param pass next time
