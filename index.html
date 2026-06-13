@@ -99,10 +99,7 @@
           <option value="claude-sonnet-4-6">Sonnet 4.6</option>
           <option value="claude-haiku-4-5">Haiku 4.5</option>
         </select>
-        <label class="chat-toggle" title="Attach a snapshot of the rendered model to each message">
-          <input id="chat-snapshot" type="checkbox" checked> &#128247;
-        </label>
-        <select id="chat-max-turns" title="Max apply-and-render steps before the loop stops on its own">
+        <select id="chat-max-turns" title="Max tool steps before the loop stops on its own">
           <option value="1">1 turn</option>
           <option value="3">3 turns</option>
           <option value="5">5 turns</option>
@@ -110,7 +107,7 @@
           <option value="15">15 turns</option>
           <option value="20">20 turns</option>
         </select>
-        <button id="chat-preview-btn" class="icon-btn" title="Preview the image that will be sent">&#128269;</button>
+        <button id="chat-preview-btn" class="icon-btn" title="Preview the current render">&#128269;</button>
         <button id="chat-history-btn" class="icon-btn" title="Chat history for this project">&#128336;</button>
       </div>
       <div id="chat-input-row">

@@ -22,9 +22,34 @@ export function getParamValues() {
   return { ...values };
 }
 
+// The full parameter list (name/type/initial/min/max/options/…) last extracted
+// from the code. Used by AI chat's get_params tool to report what's adjustable.
+export function getParamSchema() {
+  return schema.map(p => ({ ...p }));
+}
+
 export function setParamValues(v) {
   values = { ...(v || {}) };
   renderForm();
+}
+
+// Merge a partial {name: value} map of overrides from an external caller (AI
+// chat's set_params tool). Validates names against the schema, drops values
+// equal to their initial, then persists + re-renders exactly like a manual
+// edit (onValuesChanged + params:changed). Returns the names it didn't know.
+export function applyParamOverrides(partial) {
+  const byName = new Map(schema.map(p => [p.name, p]));
+  const unknown = [];
+  for (const [name, value] of Object.entries(partial || {})) {
+    const p = byName.get(name);
+    if (!p) { unknown.push(name); continue; }
+    if (JSON.stringify(value) === JSON.stringify(p.initial)) delete values[name];
+    else values[name] = value;
+  }
+  onValuesChanged(getParamValues());
+  emit('params:changed', {});
+  renderForm();
+  return { unknown };
 }
 
 function normalize(parameterSet) {
