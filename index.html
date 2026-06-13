@@ -42,6 +42,7 @@
       <button class="tab active" data-tab="code-view">Code</button>
       <button class="tab" data-tab="customizer-view">Customizer</button>
       <button class="tab" data-tab="console-view">Console <span id="error-badge" hidden>!</span></button>
+      <button class="tab" data-tab="doc-view">Doc</button>
     </nav>
     <div id="code-view" class="tab-view active">
       <textarea id="editor" spellcheck="false" autocapitalize="off" autocomplete="off"
@@ -52,6 +53,12 @@
     </div>
     <div id="console-view" class="tab-view">
       <pre id="log"></pre>
+    </div>
+    <div id="doc-view" class="tab-view">
+      <div class="doc-search-bar">
+        <input id="doc-search" type="search" placeholder="Search functions…" autocomplete="off" autocapitalize="off">
+      </div>
+      <div id="doc-list"></div>
     </div>
   </section>
 </main>
