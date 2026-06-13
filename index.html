@@ -70,6 +70,17 @@
         <p class="hint" id="chat-empty-hint">Ask Claude to modify the current model.
           Set your Anthropic API key in Chat settings first.</p>
       </div>
+      <div id="chat-toolbar">
+        <select id="chat-model" title="Model">
+          <option value="claude-sonnet-4-6">Sonnet 4.6</option>
+          <option value="claude-haiku-4-5">Haiku 4.5</option>
+        </select>
+        <label class="chat-toggle" title="Attach a snapshot of the rendered model to each message">
+          <input id="chat-snapshot" type="checkbox" checked> &#128247;
+        </label>
+        <button id="chat-preview-btn" class="icon-btn" title="Preview the image that will be sent">&#128269;</button>
+        <button id="chat-history-btn" class="icon-btn" title="Chat history for this project">&#128336;</button>
+      </div>
       <div id="chat-input-row">
         <button id="chat-clear-btn" class="icon-btn" title="New chat">&#128465;</button>
         <textarea id="chat-input" rows="1" placeholder="Ask Claude…"
@@ -186,23 +197,13 @@
   <p class="hint">Stored only in this app's local storage on this device — other sites cannot
     read it. Requests go directly from your browser to api.anthropic.com.</p>
 
-  <label class="field">Model
-    <select id="chat-set-model">
-      <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (smarter)</option>
-      <option value="claude-haiku-4-5">Claude Haiku 4.5 (faster, cheaper)</option>
-    </select>
-  </label>
+  <p class="hint">The model and the snapshot toggle now live on the Chat panel toolbar.</p>
 
   <label class="field">Max tokens per reply
     <input id="chat-set-max-tokens" type="number" min="256" max="16000" step="256" value="4096">
   </label>
   <p class="hint">Each message you send makes exactly one API call, so this hard-caps the spend
     per reply. A reply that hits the cap is cut off — you'll see a warning in the chat.</p>
-
-  <label class="field checkbox"><input id="chat-set-snapshot" type="checkbox" checked>
-    Attach a snapshot of the rendered model to each message</label>
-  <p class="hint">Lets Claude see the result of its previous code and iterate. Only the latest
-    message carries the image, so it adds roughly 1–1.5k input tokens per send.</p>
 
   <label class="field">System prompt
     <textarea id="chat-set-system" rows="12" spellcheck="false"></textarea>
@@ -212,6 +213,27 @@
     <span class="hint">Edits are saved to local storage automatically.</span>
   </div>
 
+  <form method="dialog"><button class="close-btn">Close</button></form>
+</dialog>
+
+<!-- Image preview (what gets sent to the AI) -->
+<dialog id="chat-preview-dialog">
+  <h2>Image sent to AI</h2>
+  <div id="chat-preview-body">
+    <img id="chat-preview-img" alt="snapshot preview">
+    <p id="chat-preview-dims" class="hint"></p>
+  </div>
+  <div class="dialog-actions">
+    <button id="chat-preview-copy">&#128203; Copy to clipboard</button>
+  </div>
+  <form method="dialog"><button class="close-btn">Close</button></form>
+</dialog>
+
+<!-- Chat history -->
+<dialog id="chat-history-dialog">
+  <h2>Chat history</h2>
+  <p class="hint">Saved conversations for this project. Open one to keep going where you left off.</p>
+  <ul id="chat-history-list"></ul>
   <form method="dialog"><button class="close-btn">Close</button></form>
 </dialog>
 
