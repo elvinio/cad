@@ -194,7 +194,7 @@ body {
 }
 .code-toolbar .icon-btn {
   font-size: 18px;
-  padding: 4px 8px;
+  padding: 4px 6px;
   line-height: 1;
 }
 .code-toolbar .icon-btn:disabled {
@@ -207,9 +207,9 @@ body {
   flex: 1;
   min-width: 0;
   display: flex;
-  gap: 4px;
-  margin-left: 6px;
-  padding-left: 6px;
+  gap: 0;
+  margin-left: 4px;
+  padding-left: 4px;
   border-left: 1px solid var(--border);
   overflow-x: auto;
   scrollbar-width: none;
@@ -217,19 +217,19 @@ body {
 .key-bar::-webkit-scrollbar { display: none; }
 .key-bar .key-btn {
   flex: none;
-  min-width: 32px;
-  height: 30px;
-  padding: 0 6px;
+  height: 32px;
+  padding: 0 8px;
   font-family: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
-  font-size: 16px;
+  font-size: 15px;
   line-height: 1;
-  background: var(--panel-alt);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  background: none;
+  border: none;
+  border-right: 1px solid var(--border);
   color: var(--fg);
   cursor: pointer;
   touch-action: manipulation;
 }
+.key-bar .key-btn:last-child { border-right: none; }
 .key-bar .key-btn:active { background: var(--border); }
 
 #code-view #editor {
