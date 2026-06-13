@@ -12,6 +12,7 @@ import { initRenderManager, requestRender } from './render-manager.js';
 import { initExport } from './export.js';
 import { initSettings } from './settings.js';
 import { syncProjects } from './gdrive.js';
+import { initDocs } from './docs.js';
 
 const $ = id => document.getElementById(id);
 
@@ -37,6 +38,7 @@ async function boot() {
     customAdd: $('lib-custom-add'),
   });
   initSettings();
+  initDocs();
   initRenderManager({ getCode, getParamValues });
   initExport({
     exportBtn: $('export-btn'),

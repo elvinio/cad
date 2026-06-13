@@ -71,11 +71,12 @@ function setGeometry(geometry) {
     mesh.material.dispose();
   }
   const { modelColor } = getSettings();
+  const hasVertexColors = geometry.hasAttribute('color');
   const material = new THREE.MeshStandardMaterial({
-    color: modelColor || '#f9d72c',
+    color: hasVertexColors ? 0xffffff : (modelColor || '#f9d72c'),
     flatShading: true,
     side: THREE.DoubleSide,
-    vertexColors: geometry.hasAttribute('color'),
+    vertexColors: hasVertexColors,
   });
   mesh = new THREE.Mesh(geometry, material);
   scene.add(mesh);
@@ -155,6 +156,19 @@ export function parseOFF(text) {
         colors.push(r, g, b);
       }
     }
+  }
+
+  // If every face has the same color the model has no explicit color() calls —
+  // just the renderer default. Strip vertex colors so the user's swatch applies.
+  if (hasColor) {
+    const r0 = colors[0], g0 = colors[1], b0 = colors[2];
+    let uniform = true;
+    for (let i = 0; i < colors.length; i += 3) {
+      if (Math.abs(colors[i] - r0) > 0.005 ||
+          Math.abs(colors[i + 1] - g0) > 0.005 ||
+          Math.abs(colors[i + 2] - b0) > 0.005) { uniform = false; break; }
+    }
+    if (uniform) hasColor = false;
   }
 
   const geometry = new THREE.BufferGeometry();

@@ -124,10 +124,10 @@ body {
 }
 .overlay-btn {
   position: absolute;
-  right: 6px; top: 6px;
   background: rgba(0,0,0,0.35);
 }
-#maximize-btn { top: 44px; }
+#reset-view-btn { left: 6px; top: 6px; }
+#maximize-btn   { right: 6px; top: 6px; }
 
 #viewer-panel.maximized {
   position: fixed;
@@ -340,6 +340,97 @@ dialog h3 { margin: 18px 0 8px; font-size: 14px; color: var(--muted); }
 .color-swatch.active {
   box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--fg);
 }
+
+/* ---------- Doc tab ---------- */
+#doc-view { overflow: hidden; }
+#doc-view.active { display: flex; flex-direction: column; }
+
+.doc-search-bar {
+  flex: none;
+  padding: 8px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+#doc-search {
+  width: 100%;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--fg);
+  font-size: 14px;
+  padding: 8px 10px;
+}
+#doc-search:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+#doc-list { flex: 1; overflow-y: auto; }
+
+.doc-card { border-bottom: 1px solid var(--border); }
+.doc-card-hdr {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.doc-card-hdr:active { background: var(--border); }
+
+.doc-name {
+  font-family: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.doc-cat {
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+.doc-chevron {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  transition: transform 0.15s;
+}
+.doc-card.open .doc-chevron { transform: rotate(90deg); }
+
+.doc-card-body { display: none; padding: 0 12px 12px; }
+.doc-card.open .doc-card-body { display: block; }
+
+.doc-sig {
+  font-family: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+}
+.doc-desc { font-size: 13px; color: var(--muted); margin: 0 0 8px; }
+
+.doc-params { width: 100%; border-collapse: collapse; font-size: 12px; }
+.doc-pname {
+  font-family: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+  color: var(--fg);
+  padding: 3px 10px 3px 0;
+  vertical-align: top;
+  white-space: nowrap;
+  width: 1%;
+}
+.doc-pdesc { color: var(--muted); padding: 3px 0; vertical-align: top; }
+.doc-params tr { border-top: 1px solid var(--border); }
+.doc-params tr:first-child { border-top: none; }
+
+.doc-empty { padding: 24px; text-align: center; color: var(--muted); font-size: 14px; }
 
 /* ---------- Toasts ---------- */
 #toast-container {
