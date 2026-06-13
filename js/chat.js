@@ -7,6 +7,7 @@ import { getSettings, saveSettings,
 import { emit, subscribe } from './state.js';
 import { getCode, setCode } from './editor.js';
 import { updateActiveCode } from './projects.js';
+import { CURATED } from './libraries.js';
 import { getParamValues, getParamSchema, applyParamOverrides } from './customizer.js';
 import { captureSnapshot, captureMultiView, getMeshStats } from './viewer.js';
 import { toast } from './ui.js';
@@ -20,14 +21,35 @@ Tools:
 - write_code: replace the WHOLE file. Use for new models from scratch or large rewrites.
 - get_params / set_params: read the Customizer parameters and change their values. Parameters are top-level variables that drive the geometry; changing them re-renders the model and is usually better than hard-coding numbers into the code.
 - look: render and return a 2×2 image of the model — ISO (corner), FRONT (-Y), RIGHT (+X), TOP (down -Z) — in OpenSCAD's Z-up frame. edit_code/write_code/set_params only report compile status and the bounding box as text; call look when you want to actually SEE the result. The image is perspective — judge sizes from the reported bounding box, not pixels.
+- lookup_lib: search the installed BOSL2 library for the exact signature of a module or function (e.g. "rounded box", "gear", "screw thread"). Returns names, one-line synopses, usage signatures and argument names. Use it BEFORE calling a library module you're not 100% sure of — do not guess argument names.
+
+Building blocks: you don't have to model everything from raw primitives. The libraries listed in <available_libraries> are pre-made parts you compose like Lego. Prefer them when one fits — especially BOSL2 (include <BOSL2/std.scad>) for rounded/chamfered shapes, attachments, gears, screws and threads. Only include a library that is actually listed in <available_libraries>; if the user wants something that needs a library that isn't installed, say so briefly instead of guessing. For the common cases, plain OpenSCAD primitives + CSG (cube/cylinder/sphere, union/difference/intersection/hull) are still the simplest choice.
 
 Workflow: make a change with edit_code/write_code/set_params, read the text result; if it failed to compile, fix it; when you want to verify the shape, call look. When the model is right, stop and give a one- or two-sentence summary.
 
 Rules:
 - Prefer small edit_code edits over rewriting the whole file.
-- Keep the code valid OpenSCAD. Preserve the user's Customizer parameters (top-level variables with their // [min:max] annotations and // descriptions) unless asked to change them; tweak values with set_params rather than editing the annotations.
+- Keep the code valid OpenSCAD (units are millimetres). Preserve the user's Customizer parameters (top-level variables with their // [min:max] annotations and // descriptions) unless asked to change them; tweak values with set_params rather than editing the annotations. For new models, expose the key dimensions as such top-level variables so the result is parametric.
+- Don't guess library argument names — call lookup_lib first. Confirm a finished shape with look before declaring it done.
 - Keep explanations brief — the user is on a phone.
 - If a request is ambiguous, make a sensible choice and note it briefly rather than asking questions.`;
+
+// Always-on BOSL2 starter kit: the handful of modules that cover most requests,
+// appended to the system prompt only when BOSL2 is installed so even a zero-
+// tool-call reply composes them correctly. The long tail goes through lookup_lib.
+const CORE_BOSL2 =
+`BOSL2 quick reference (include <BOSL2/std.scad>; anchors: TOP/BOTTOM/LEFT/RIGHT/FWD/BACK/CENTER, combine with +):
+- cuboid(size, [rounding=], [chamfer=], [edges=], [anchor=], [spin=], [orient=]) — box with rounded/chamfered edges.
+- cyl(h=, r=|d=, [rounding=], [chamfer=], [anchor=]) — cylinder with rounded ends; rounded_prism/prismoid for tapers.
+- tube(h=, or=|od=, ir=|id=|wall=, [anchor=]) — hollow cylinder.
+- sphere(r=|d=), spheroid(r=|d=, [circum=]) — spheres.
+- prismoid(size1=, size2=, h=, [rounding=], [chamfer=]) — tapered box / pyramid frustum.
+- attach(parent_anchor, child_anchor) CHILD; / position(anchor) CHILD; — place a child on a parent's face without manual translate/rotate.
+- xcopies/ycopies/zcopies(spacing=|n=) CHILD; , grid_copies(spacing=, n=) CHILD; — repeat children in a line or grid.
+- linear_sweep(region, h=), rotate_sweep(region, angle=) — extrude/revolve a 2D shape.
+- screw(spec, length=, [head=]), nut(spec), threaded_rod(d=, l=, pitch=) — standard fasteners and threads.
+- spur_gear(circ_pitch=|mod=, teeth=, thickness=), rack(...), bevel_gear(...) — gears.
+Call lookup_lib for exact signatures of anything else.`;
 
 // Tools the model can call. read_code/edit_code/write_code/get_params/set_params
 // all operate on the live editor + customizer; look renders and returns the
@@ -110,6 +132,21 @@ const TOOLS = [
       + 'Z-up) plus the bounding-box dimensions. Call this whenever you want to see the result.',
     input_schema: { type: 'object', properties: {} },
   },
+  {
+    name: 'lookup_lib',
+    description:
+      'Search the BOSL2 library for modules/functions matching a query and return their exact '
+      + 'signatures — name, one-line synopsis, usage forms and argument names. Use this before '
+      + 'calling a library module whose arguments you are not sure of, instead of guessing. '
+      + 'Example queries: "rounded box", "attach to face", "spur gear", "screw thread", "hex nut".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'What you are looking for, e.g. "rounded cuboid" or "metric screw".' },
+      },
+      required: ['query'],
+    },
+  },
 ];
 
 // Conversation state. History stores text-only content; rendered images are
@@ -127,6 +164,10 @@ let history = [];
 let lastCodeSeenByModel = null;
 let busy = false;
 let sdkClientPromise = null;
+// Lazily-fetched BOSL2 signature index (vendor/libraries/bosl2-index.json), used
+// by the lookup_lib tool. Cached after first fetch like sdkClientPromise; the
+// SW back-fills it into the cache on first use so it works offline thereafter.
+let bosl2IndexPromise = null;
 
 // Tool-loop control: stopRequested is set by the Stop button; activeStream is
 // the in-flight SDK stream so Stop can abort the current model reply.
@@ -143,6 +184,70 @@ const $ = id => document.getElementById(id);
 
 function getSystemPrompt() {
   return getSettings().chatSystemPrompt || DEFAULT_SYSTEM_PROMPT;
+}
+
+// The editable base prompt plus install-dependent guidance that must apply even
+// when the user has overridden the base prompt: the BOSL2 starter kit (only when
+// BOSL2 is installed). Kept out of getSystemPrompt() so the settings textarea
+// shows just the editable base and the kit can't be accidentally baked in.
+function buildSystemPrompt() {
+  let prompt = getSystemPrompt();
+  if (getSettings().installedLibs?.includes('BOSL2')) prompt += `\n\n${CORE_BOSL2}`;
+  return prompt;
+}
+
+// A first-turn-only block listing the libraries the user has installed (name +
+// what it's for + its include path) so the model knows what it may compose with.
+function availableLibsBlock() {
+  const installed = getSettings().installedLibs || [];
+  const include = name => name === 'fonts' ? 'use with text()' : `include <${name}/${name === 'BOSL2' ? 'std.scad' : '…'}>`;
+  const lines = installed.map(name => {
+    const desc = CURATED.find(c => c.name === name)?.desc || 'custom library';
+    return `- ${name} — ${desc} (${include(name)})`;
+  });
+  const body = lines.length
+    ? lines.join('\n')
+    : '- (none installed — use only plain OpenSCAD primitives; tell the user to install a library from the Libraries menu if they need one)';
+  return `\n\n<available_libraries>\n${body}\n</available_libraries>`;
+}
+
+// Lazily fetch + cache the BOSL2 signature index for lookup_lib.
+function getBosl2Index() {
+  if (!bosl2IndexPromise) {
+    bosl2IndexPromise = fetch('vendor/libraries/bosl2-index.json')
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .catch(e => { bosl2IndexPromise = null; throw e; });
+  }
+  return bosl2IndexPromise;
+}
+
+// Score entries against the query words (name hits weigh most, then synopsis,
+// then arg names) and return the top matches formatted compactly for the model.
+function searchBosl2Index(index, query) {
+  const words = String(query).toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 1);
+  if (!words.length) return [];
+  const scored = [];
+  for (const e of index.entries) {
+    const name = e.name.toLowerCase();
+    const syn = (e.synopsis || '').toLowerCase();
+    const argNames = e.args.map(a => a.name.toLowerCase()).join(' ');
+    let score = 0;
+    for (const w of words) {
+      if (name === w) score += 12;
+      else if (name.includes(w)) score += 6;
+      if (syn.includes(w)) score += 3;
+      if (argNames.includes(w)) score += 1;
+    }
+    if (score) scored.push({ score, e });
+  }
+  scored.sort((a, b) => b.score - a.score || a.e.name.localeCompare(b.e.name));
+  return scored.slice(0, 8).map(s => s.e);
+}
+
+function formatBosl2Match(e) {
+  const usage = e.usage.length ? e.usage.map(u => `    ${u}`).join('\n') : '    (see Arguments)';
+  const args = e.args.length ? `\n  args: ${e.args.map(a => a.name).join(', ')}` : '';
+  return `• ${e.name} — ${e.synopsis} [${e.file}]\n${usage}${args}`;
 }
 
 async function getClient() {
@@ -401,6 +506,9 @@ function displayToolUse({ name, input }) {
     case 'look':
       addToolUseRow('look', '');
       break;
+    case 'lookup_lib':
+      addToolUseRow('lookup_lib', input?.query ? `"${input.query}"` : '');
+      break;
     default:
       addToolUseRow(name, '');
   }
@@ -541,6 +649,27 @@ function runLook() {
   ];
 }
 
+async function runLookupLib(input) {
+  const query = (input?.query || '').trim();
+  if (!query) return [{ type: 'text', text: 'lookup_lib needs a `query`, e.g. "rounded box" or "spur gear".' }];
+  if (!getSettings().installedLibs?.includes('BOSL2')) {
+    return [{ type: 'text', text: 'BOSL2 is not installed, so its signatures are unavailable. Tell the user to install BOSL2 from the Libraries menu, or build the model from plain OpenSCAD primitives.' }];
+  }
+  let index;
+  try {
+    index = await getBosl2Index();
+  } catch (e) {
+    return [{ type: 'text', text: `Could not load the BOSL2 index (${e.message}). Fall back to plain OpenSCAD primitives.` }];
+  }
+  const matches = searchBosl2Index(index, query);
+  if (!matches.length) {
+    return [{ type: 'text', text: `No BOSL2 module matched "${query}". Try different keywords, or build it from primitives.` }];
+  }
+  const text = `BOSL2 matches for "${query}" (include <BOSL2/std.scad>):\n\n`
+    + matches.map(formatBosl2Match).join('\n\n');
+  return [{ type: 'text', text }];
+}
+
 // Dispatch one tool_use block to its handler, returning tool_result content.
 async function runTool(block) {
   switch (block.name) {
@@ -550,6 +679,7 @@ async function runTool(block) {
     case 'get_params': return runGetParams();
     case 'set_params': return await runSetParams(block.input || {});
     case 'look':       return runLook();
+    case 'lookup_lib': return await runLookupLib(block.input || {});
     default:           return [{ type: 'text', text: `Unknown tool: ${block.name}` }];
   }
 }
@@ -595,7 +725,7 @@ async function send() {
   let userText = prompt;
   if (history.length === 0) {
     const code = getCode();
-    userText = `<current_code>\n${code}\n</current_code>${currentParamsBlock()}\n\n${prompt}`;
+    userText = `<current_code>\n${code}\n</current_code>${currentParamsBlock()}${availableLibsBlock()}\n\n${prompt}`;
     lastCodeSeenByModel = code;
   } else if (getCode() !== lastCodeSeenByModel) {
     userText = `${prompt}\n\n[The editor code has changed since you last read it — call read_code before editing.]`;
@@ -628,7 +758,7 @@ async function send() {
       const stream = client.messages.stream({
         model: settings.chatModel,
         max_tokens: Math.max(256, Number(settings.chatMaxTokens) || 4096),
-        system: getSystemPrompt(),
+        system: buildSystemPrompt(),
         messages,
         tools: TOOLS,
       });
