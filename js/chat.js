@@ -872,13 +872,17 @@ async function send() {
 
 // ---------- session persistence ----------
 
-// Strip the <current_code> wrapper we prepend to outgoing turns so the
+// Strip the context preamble we prepend to the first outgoing turn so the
 // stored/restored bubble shows only what the user actually typed.
 function displayText(content) {
   const text = typeof content === 'string'
     ? content
     : (content.find?.(b => b.type === 'text')?.text || '');
-  return text.replace(/^<current_code>[\s\S]*?<\/current_code>\n\n/, '');
+  return text
+    .replace(/^<current_code>[\s\S]*?<\/current_code>\n*/, '')
+    .replace(/^<current_params>[\s\S]*?<\/current_params>\n*/, '')
+    .replace(/^<available_libraries>[\s\S]*?<\/available_libraries>\n*/, '')
+    .replace(/\n\n\[The editor code has changed[^\]]*\]$/, '');
 }
 
 function resetSessionState() {
