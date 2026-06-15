@@ -54,6 +54,7 @@ export function initAssembly(elements) {
     if (!part) return;
     part.transform = transform;
     autosave();
+    if (id === selectedPartId) updateTransformPanel(part);
   });
 
   // Selection from the 3D viewport (viewer raycast). Mirror it into the list +
@@ -73,6 +74,8 @@ export function initAssembly(elements) {
   });
 
   subscribe('fit:updated', ({ pairs }) => renderFit(pairs));
+
+  initTransformPanel();
 }
 
 function isAssemblyMode() {
@@ -87,6 +90,8 @@ function onSelectionChanged(id) {
     els.partsList.querySelectorAll('li').forEach(li =>
       li.classList.toggle('selected', li.dataset.id === id));
   }
+  const part = id && active && active.parts.find(p => p.id === id);
+  updateTransformPanel(part || null);
   retargetParamTab();
 }
 
@@ -127,6 +132,7 @@ function setActive(assembly) {
   emit('assembly:active', { assembly });
   renderParts();
   syncClearanceUI();
+  updateTransformPanel(null);
   retargetParamTab();   // nothing selected yet -> clear the Param tab
 }
 
@@ -341,6 +347,70 @@ function renderFit(pairs) {
     row.appendChild(status);
     els.fitReadout.appendChild(row);
   }
+}
+
+// ----- Transform panel -----
+
+function initTransformPanel() {
+  const panel = document.getElementById('part-transform-panel');
+  if (!panel) return;
+
+  panel.addEventListener('click', (e) => {
+    const btn = e.target.closest('.txp-btn');
+    if (!btn || !active || !selectedPartId) return;
+    const part = active.parts.find(p => p.id === selectedPartId);
+    if (!part) return;
+    const prop = btn.dataset.prop;
+    const dir = parseFloat(btn.dataset.d);
+    const step = prop[0] === 'p'
+      ? parseFloat(document.getElementById('txp-pos-step').value)
+      : parseFloat(document.getElementById('txp-rot-step').value);
+    setTransformProp(part, prop, getTransformProp(part, prop) + dir * step);
+    updateTransformPanel(part);
+    autosave();
+    emit('assembly:parts-changed', { assembly: active });
+  });
+
+  panel.addEventListener('change', (e) => {
+    const inp = e.target.closest('.txp-inp');
+    if (!inp || !active || !selectedPartId) return;
+    const part = active.parts.find(p => p.id === selectedPartId);
+    if (!part) return;
+    setTransformProp(part, inp.dataset.prop, parseFloat(inp.value) || 0);
+    autosave();
+    emit('assembly:parts-changed', { assembly: active });
+  });
+}
+
+const _propIndex = { px: [0, 'pos'], py: [1, 'pos'], pz: [2, 'pos'],
+                     rx: [0, 'rot'], ry: [1, 'rot'], rz: [2, 'rot'] };
+
+function getTransformProp(part, prop) {
+  const [i, arr] = _propIndex[prop];
+  return ((part.transform || {})[arr] || [0, 0, 0])[i] || 0;
+}
+
+function setTransformProp(part, prop, val) {
+  if (!part.transform) part.transform = { pos: [0, 0, 0], rot: [0, 0, 0], scale: 1 };
+  const [i, arr] = _propIndex[prop];
+  if (!part.transform[arr]) part.transform[arr] = [0, 0, 0];
+  part.transform[arr][i] = Math.round(val * 1000) / 1000;
+}
+
+function updateTransformPanel(part) {
+  const panel = document.getElementById('part-transform-panel');
+  if (!panel) return;
+  if (!part) { panel.hidden = true; return; }
+  panel.hidden = false;
+  const t = part.transform || {};
+  const pos = t.pos || [0, 0, 0];
+  const rot = t.rot || [0, 0, 0];
+  document.getElementById('txp-px').value = pos[0];
+  document.getElementById('txp-py').value = pos[1];
+  document.getElementById('txp-pz').value = pos[2];
+  document.getElementById('txp-rx').value = rot[0];
+  document.getElementById('txp-ry').value = rot[1];
+  document.getElementById('txp-rz').value = rot[2];
 }
 
 // ----- helpers (mirrored from projects.js) -----
