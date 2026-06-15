@@ -305,7 +305,9 @@ export function cycleDisplayMode() {
 // frame (no preserveDrawingBuffer), then downscales onto a 2D canvas.
 export function captureSnapshot(maxDim = 768) {
   if (!mesh || !renderer) return null;
+  axisGroup.visible = false;
   renderer.render(scene, camera);
+  axisGroup.visible = grid.visible;
   const src = renderer.domElement;
   const scale = Math.min(1, maxDim / Math.max(src.width, src.height));
   const out = document.createElement('canvas');
@@ -348,6 +350,7 @@ export function captureMultiView(maxDim = 1024) {
   ctx.fillStyle = '#0f1830';
   ctx.fillRect(0, 0, out.width, out.height);
 
+  axisGroup.visible = false;
   MULTIVIEW_VIEWS.forEach((name, idx) => {
     const v = VIEW_DIRECTIONS[name];
     const up = (name === 'top' || name === 'bottom')
@@ -376,6 +379,7 @@ export function captureMultiView(maxDim = 1024) {
   controls.target.copy(saved.target);
   grid.scale.setScalar(saved.gridScale);
   axisGroup.scale.setScalar(saved.axisScale);
+  axisGroup.visible = grid.visible;
   controls.update();
   renderer.render(scene, camera);
 
