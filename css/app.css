@@ -153,7 +153,8 @@ body {
   line-height: 1;
 }
 .view-presets button:active { background: var(--accent); color: #1a1a2e; }
-#reset-view-btn, #maximize-btn { font-size: 16px; padding: 0 6px; }
+#maximize-btn, #grid-toggle-btn { font-size: 16px; padding: 0 6px; }
+#grid-toggle-btn.grid-off { opacity: 0.35; }
 
 #viewer-panel.maximized {
   position: fixed;
