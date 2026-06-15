@@ -93,6 +93,36 @@
         </label>
       </div>
       <ul id="parts-list"></ul>
+      <div id="part-transform-panel" hidden>
+        <div class="txp-section">
+          <div class="txp-section-label">Position (mm)</div>
+          <div class="txp-row"><span class="txp-ax">X</span><button class="txp-btn" data-prop="px" data-d="-1">−</button><input class="txp-inp" id="txp-px" data-prop="px" type="number" inputmode="decimal"><button class="txp-btn" data-prop="px" data-d="1">+</button></div>
+          <div class="txp-row"><span class="txp-ax">Y</span><button class="txp-btn" data-prop="py" data-d="-1">−</button><input class="txp-inp" id="txp-py" data-prop="py" type="number" inputmode="decimal"><button class="txp-btn" data-prop="py" data-d="1">+</button></div>
+          <div class="txp-row"><span class="txp-ax">Z</span><button class="txp-btn" data-prop="pz" data-d="-1">−</button><input class="txp-inp" id="txp-pz" data-prop="pz" type="number" inputmode="decimal"><button class="txp-btn" data-prop="pz" data-d="1">+</button></div>
+        </div>
+        <div class="txp-section">
+          <div class="txp-section-label">Rotation (°)</div>
+          <div class="txp-row"><span class="txp-ax">X</span><button class="txp-btn" data-prop="rx" data-d="-1">−</button><input class="txp-inp" id="txp-rx" data-prop="rx" type="number" inputmode="decimal"><button class="txp-btn" data-prop="rx" data-d="1">+</button></div>
+          <div class="txp-row"><span class="txp-ax">Y</span><button class="txp-btn" data-prop="ry" data-d="-1">−</button><input class="txp-inp" id="txp-ry" data-prop="ry" type="number" inputmode="decimal"><button class="txp-btn" data-prop="ry" data-d="1">+</button></div>
+          <div class="txp-row"><span class="txp-ax">Z</span><button class="txp-btn" data-prop="rz" data-d="-1">−</button><input class="txp-inp" id="txp-rz" data-prop="rz" type="number" inputmode="decimal"><button class="txp-btn" data-prop="rz" data-d="1">+</button></div>
+        </div>
+        <div class="txp-steps">
+          <label>Pos: <select id="txp-pos-step">
+            <option value="0.1">0.1 mm</option>
+            <option value="0.5">0.5 mm</option>
+            <option value="1" selected>1 mm</option>
+            <option value="5">5 mm</option>
+            <option value="10">10 mm</option>
+          </select></label>
+          <label>Rot: <select id="txp-rot-step">
+            <option value="1">1°</option>
+            <option value="5">5°</option>
+            <option value="15" selected>15°</option>
+            <option value="45">45°</option>
+            <option value="90">90°</option>
+          </select></label>
+        </div>
+      </div>
       <div id="fit-readout"><p class="hint">Add two or more parts to see fit results.</p></div>
     </div>
     <div id="customizer-view" class="tab-view">

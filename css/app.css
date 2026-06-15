@@ -865,6 +865,77 @@ body.mode-assembly #paramset-bar { display: none; }
 #fit-readout .fit-clash { color: var(--error); font-weight: 700; }
 #fit-readout .fit-tight { color: var(--accent); }
 
+/* ---------- Part transform panel (nudge controls for selected part) ---------- */
+#part-transform-panel {
+  padding: 8px;
+  border-top: 1px solid var(--border);
+}
+.txp-section { margin-bottom: 6px; }
+.txp-section-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.txp-row {
+  display: grid;
+  grid-template-columns: 14px 36px 1fr 36px;
+  gap: 3px;
+  align-items: center;
+  margin-bottom: 3px;
+}
+.txp-ax {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  text-align: center;
+}
+.txp-btn {
+  width: 36px;
+  height: 32px;
+  font-size: 20px;
+  line-height: 1;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--fg);
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0;
+  touch-action: manipulation;
+}
+.txp-btn:active { background: var(--border); }
+.txp-inp {
+  width: 100%;
+  box-sizing: border-box;
+  text-align: center;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 2px;
+  font-size: 13px;
+  -moz-appearance: textfield;
+}
+.txp-inp::-webkit-inner-spin-button,
+.txp-inp::-webkit-outer-spin-button { -webkit-appearance: none; }
+.txp-steps {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.txp-steps select {
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 4px;
+  font-size: 12px;
+}
+
 /* ---------- Param-set bar (top of the Param tab) ---------- */
 #paramset-bar {
   display: flex;
