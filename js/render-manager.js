@@ -112,6 +112,24 @@ function paramDefines() {
   return definesFromOverrides(getParamValues());
 }
 
+// Run the param-extraction pass on arbitrary source and return the parsed
+// Customizer ParameterSet (or null). Used by the assembly Param tab to show a
+// selected part's project parameters without driving the single-file pipeline.
+export async function extractParams(source, libNames) {
+  if (!source || !source.trim()) return null;
+  const settings = getSettings();
+  try {
+    const res = await runJob({
+      source, format: 'param', defines: {},
+      backend: settings.backend,
+      libNames: libNames || settings.installedLibs,
+    });
+    return JSON.parse(new TextDecoder().decode(res.output));
+  } catch {
+    return null;
+  }
+}
+
 // Render arbitrary source + per-part overrides to OFF text, off to the side of
 // the live single-file pipeline (used by the assembly viewer to render each
 // part). Sequential callers only — shares the one worker, so await each call.

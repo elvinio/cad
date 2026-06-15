@@ -798,6 +798,8 @@ dialog h3 { margin: 18px 0 8px; font-size: 14px; color: var(--muted); }
 body.mode-assembly .tab-assembly { display: block; }
 body.mode-assembly [data-tab="code-view"],
 body.mode-assembly [data-tab="doc-view"] { display: none; }
+/* The param-set bar manages a scad project's presets, not assembly parts. */
+body.mode-assembly #paramset-bar { display: none; }
 
 #parts-toolbar {
   display: flex;

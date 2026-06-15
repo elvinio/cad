@@ -16,14 +16,20 @@
 //   fit:updated     {pairs:[{a,b,clash,gap}]}         render the fit readout
 
 import { listAssemblies, getAssembly, saveAssembly, deleteAssembly,
-         createAssembly, listProjects } from './storage.js';
+         createAssembly, listProjects, getProject } from './storage.js';
 import { emit, subscribe } from './state.js';
+import { extractParams } from './render-manager.js';
+import { setParamValues, getParamValues } from './customizer.js';
 import { toast } from './ui.js';
 
 const DEFAULT_PART_COLOR = '#cccccc';
 
 let active = null;
 let els = null;
+let selectedPartId = null;
+// Cache of extracted ParameterSets per scad project (keyed by projectId) so
+// re-selecting a part doesn't re-run the worker param pass every time.
+const paramSchemaCache = new Map();
 
 export function initAssembly(elements) {
   els = elements;
@@ -50,13 +56,64 @@ export function initAssembly(elements) {
     autosave();
   });
 
-  subscribe('part:selected', ({ id }) => {
-    if (!els || !els.partsList) return;
-    els.partsList.querySelectorAll('li').forEach(li =>
-      li.classList.toggle('selected', li.dataset.id === id));
+  // Selection from the 3D viewport (viewer raycast). Mirror it into the list +
+  // retarget the Param tab to the clicked part.
+  subscribe('part:selected', ({ id }) => onSelectionChanged(id));
+
+  // The Param tab is shared: in assembly mode its edits belong to the selected
+  // part (written inline into the assembly), not to a scad project.
+  subscribe('params:changed', () => {
+    if (!isAssemblyMode() || !active || !selectedPartId) return;
+    const part = active.parts.find(p => p.id === selectedPartId);
+    if (!part || part.source.type !== 'scad') return;
+    part.source.overrides = getParamValues();
+    autosave();
+    // Re-render just this part (the viewer re-renders parts whose overrides changed).
+    emit('assembly:parts-changed', { assembly: active });
   });
 
   subscribe('fit:updated', ({ pairs }) => renderFit(pairs));
+}
+
+function isAssemblyMode() {
+  return document.body.classList.contains('mode-assembly');
+}
+
+// Central selection handler: highlight the row and point the Param tab at the
+// selected part's parameters (pre-filled with its saved overrides).
+function onSelectionChanged(id) {
+  selectedPartId = id || null;
+  if (els && els.partsList) {
+    els.partsList.querySelectorAll('li').forEach(li =>
+      li.classList.toggle('selected', li.dataset.id === id));
+  }
+  retargetParamTab();
+}
+
+async function retargetParamTab() {
+  if (!active) return;
+  const part = selectedPartId && active.parts.find(p => p.id === selectedPartId);
+  // No (scad) part selected → clear the form.
+  if (!part || part.source.type !== 'scad') {
+    emit('params:extracted', { parameters: [] });
+    setParamValues({});
+    return;
+  }
+  const project = getProject(part.source.projectId);
+  if (!project) {
+    emit('params:extracted', { parameters: [] });
+    setParamValues({});
+    return;
+  }
+  let schema = paramSchemaCache.get(part.source.projectId);
+  if (!schema) {
+    schema = await extractParams(project.code);
+    if (schema) paramSchemaCache.set(part.source.projectId, schema);
+  }
+  // The selection may have changed while we awaited; bail if so.
+  if (selectedPartId !== part.id) return;
+  emit('params:extracted', schema || { parameters: [] });
+  setParamValues(part.source.overrides || {});
 }
 
 export function getActiveAssembly() {
@@ -65,10 +122,12 @@ export function getActiveAssembly() {
 
 function setActive(assembly) {
   active = assembly;
+  selectedPartId = null;
   document.getElementById('project-name').textContent = assembly.name;
   emit('assembly:active', { assembly });
   renderParts();
   syncClearanceUI();
+  retargetParamTab();   // nothing selected yet -> clear the Param tab
 }
 
 function autosave() {
@@ -190,9 +249,8 @@ function renderParts() {
     name.className = 'part-name';
     name.textContent = part.name;
     name.addEventListener('click', () => {
-      els.partsList.querySelectorAll('li').forEach(row =>
-        row.classList.toggle('selected', row === li));
-      emit('part:select', { id: part.id });
+      emit('part:select', { id: part.id });   // viewer: attach gizmo
+      onSelectionChanged(part.id);             // list highlight + Param tab retarget
     });
     li.appendChild(name);
 
@@ -209,6 +267,7 @@ function renderParts() {
       autosave();
       emit('assembly:parts-changed', { assembly: active });
       emit('part:select', { id: null });
+      onSelectionChanged(null);
       renderParts();
     }));
 

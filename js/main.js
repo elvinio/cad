@@ -19,6 +19,7 @@ import { initDocs } from './docs.js';
 import { initChat } from './chat.js';
 
 const $ = id => document.getElementById(id);
+const inAssemblyMode = () => document.body.classList.contains('mode-assembly');
 
 async function boot() {
   if ('serviceWorker' in navigator) {
@@ -42,7 +43,11 @@ async function boot() {
     e.preventDefault();
     insertText(btn.dataset.key);
   });
-  initCustomizer($('customizer-form'), { onValuesChanged: updateActiveParams });
+  // In assembly mode the Param tab edits the selected part (assembly.js persists
+  // those via params:changed), so don't also write them onto the scad project.
+  initCustomizer($('customizer-form'), {
+    onValuesChanged: (v) => { if (!inAssemblyMode()) updateActiveParams(v); },
+  });
   initParamSets({
     select: $('paramset-select'),
     saveBtn: $('paramset-save'),
@@ -137,7 +142,6 @@ async function boot() {
   // Wiring: edits and settings changes trigger renders. In assembly mode the
   // single-file pipeline is dormant — the viewer renders each part itself (and
   // re-renders parts on settings:changed), so skip the auto single render.
-  const inAssemblyMode = () => document.body.classList.contains('mode-assembly');
   subscribe('code:changed', ({ immediate }) => { if (!inAssemblyMode()) requestRender(immediate ? 'project' : 'code'); });
   subscribe('params:changed', () => { if (!inAssemblyMode()) requestRender('params'); });
   subscribe('settings:changed', () => { if (!inAssemblyMode()) requestRender('settings'); syncQualityBtn(); });
