@@ -134,11 +134,14 @@ async function boot() {
     syncQualityBtn();
   });
 
-  // Wiring: edits and settings changes trigger renders
-  subscribe('code:changed', ({ immediate }) => requestRender(immediate ? 'project' : 'code'));
-  subscribe('params:changed', () => requestRender('params'));
-  subscribe('settings:changed', () => { requestRender('settings'); syncQualityBtn(); });
-  subscribe('libs:changed', () => requestRender('settings'));
+  // Wiring: edits and settings changes trigger renders. In assembly mode the
+  // single-file pipeline is dormant — the viewer renders each part itself (and
+  // re-renders parts on settings:changed), so skip the auto single render.
+  const inAssemblyMode = () => document.body.classList.contains('mode-assembly');
+  subscribe('code:changed', ({ immediate }) => { if (!inAssemblyMode()) requestRender(immediate ? 'project' : 'code'); });
+  subscribe('params:changed', () => { if (!inAssemblyMode()) requestRender('params'); });
+  subscribe('settings:changed', () => { if (!inAssemblyMode()) requestRender('settings'); syncQualityBtn(); });
+  subscribe('libs:changed', () => { if (!inAssemblyMode()) requestRender('settings'); });
   subscribe('project:changed', ({ project }) => {
     // Opening a scad project leaves assembly mode (if we were in it).
     if (document.body.classList.contains('mode-assembly')) {

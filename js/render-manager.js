@@ -96,14 +96,35 @@ function qualityDefines(settings) {
   return QUALITY_DEFINES[settings.quality] || QUALITY_DEFINES.preview;
 }
 
-function paramDefines() {
+// Encode an overrides map ({name: value}) as OpenSCAD -D defines, matching the
+// quoting rules in CLAUDE.md gotcha #3 (strings JSON-quoted, vectors bracketed).
+function definesFromOverrides(overrides) {
   const d = {};
-  for (const [name, v] of Object.entries(getParamValues() || {})) {
+  for (const [name, v] of Object.entries(overrides || {})) {
     if (typeof v === 'string') d[name] = JSON.stringify(v);
     else if (Array.isArray(v)) d[name] = `[${v.join(',')}]`;
     else d[name] = String(v);
   }
   return d;
+}
+
+function paramDefines() {
+  return definesFromOverrides(getParamValues());
+}
+
+// Render arbitrary source + per-part overrides to OFF text, off to the side of
+// the live single-file pipeline (used by the assembly viewer to render each
+// part). Sequential callers only — shares the one worker, so await each call.
+export async function renderSource({ source, overrides = {}, libNames } = {}) {
+  if (!source || !source.trim()) throw new Error('empty source');
+  const settings = getSettings();
+  const defines = { ...qualityDefines(settings), ...definesFromOverrides(overrides) };
+  const res = await runGeometryJob({
+    source, format: 'off', defines,
+    backend: settings.backend,
+    libNames: libNames || settings.installedLibs,
+  });
+  return new TextDecoder().decode(res.output);
 }
 
 // reason: 'code' | 'params' | 'settings' | 'project'
