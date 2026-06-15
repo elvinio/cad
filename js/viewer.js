@@ -5,7 +5,7 @@ import { OrbitControls } from 'three/addons/OrbitControls.js';
 import { subscribe, emit } from './state.js';
 import { getSettings } from './storage.js';
 
-let renderer, scene, camera, controls, mesh, grid, highlightMesh;
+let renderer, scene, camera, controls, mesh, grid, axisGroup, highlightMesh;
 let firstFit = true;
 let preFsDist = null;
 let meshStats = null; // { triangles, size:[dx,dy,dz] } for the current mesh
@@ -23,6 +23,102 @@ function applyDisplayMode(material) {
   material.opacity = displayMode === 'ghost' ? 0.35 : 1;
   material.depthWrite = displayMode !== 'ghost';
   material.needsUpdate = true;
+}
+
+// Build a coloured XYZ axis indicator: shafts, cones, tick marks, and letter
+// sprites.  Everything is in "grid-local" units so it can be scaled identically
+// to the GridHelper and always fits the model on screen.
+function makeAxisLabel(text, color, position) {
+  const size = 64;
+  const cv = document.createElement('canvas');
+  cv.width = size; cv.height = size;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
+  ctx.font = `bold ${Math.round(size * 0.68)}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, size / 2, size / 2);
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cv), depthTest: false }),
+  );
+  sprite.scale.set(8, 8, 1);
+  sprite.position.copy(position);
+  return sprite;
+}
+
+function buildAxisGroup() {
+  const group = new THREE.Group();
+  const SHAFT   = 55;   // shaft length in local units
+  const CONE_L  = 6;    // arrowhead length
+  const CONE_R  = 1.8;  // arrowhead base radius
+  const TICK_D  = 10;   // tick spacing (matches one grid cell)
+  const TICK_S  = 1.8;  // half-length of each tick arm
+
+  // Small white sphere at the origin so the intersection point is clear.
+  group.add(new THREE.Mesh(
+    new THREE.SphereGeometry(1.2, 8, 8),
+    new THREE.MeshBasicMaterial({ color: 0xcccccc }),
+  ));
+
+  const axes = [
+    {
+      dir: new THREE.Vector3(1, 0, 0), color: 0xff4444, name: 'X',
+      t1: new THREE.Vector3(0, 1, 0), t2: new THREE.Vector3(0, 0, 1),
+      coneRotAxis: 'z', coneRotAngle: -Math.PI / 2,
+    },
+    {
+      dir: new THREE.Vector3(0, 1, 0), color: 0x44cc44, name: 'Y',
+      t1: new THREE.Vector3(1, 0, 0), t2: new THREE.Vector3(0, 0, 1),
+      coneRotAxis: null, coneRotAngle: 0,
+    },
+    {
+      dir: new THREE.Vector3(0, 0, 1), color: 0x4499ff, name: 'Z',
+      t1: new THREE.Vector3(1, 0, 0), t2: new THREE.Vector3(0, 1, 0),
+      coneRotAxis: 'x', coneRotAngle: Math.PI / 2,
+    },
+  ];
+
+  axes.forEach(({ dir, color, name, t1, t2, coneRotAxis, coneRotAngle }) => {
+    const lineMat = new THREE.LineBasicMaterial({ color });
+
+    // Axis shaft
+    group.add(new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(),
+        dir.clone().multiplyScalar(SHAFT),
+      ]),
+      lineMat,
+    ));
+
+    // Arrowhead cone
+    const cone = new THREE.Mesh(
+      new THREE.ConeGeometry(CONE_R, CONE_L, 8),
+      new THREE.MeshBasicMaterial({ color }),
+    );
+    cone.position.copy(dir.clone().multiplyScalar(SHAFT + CONE_L / 2));
+    if (coneRotAxis) cone.rotation[coneRotAxis] = coneRotAngle;
+    group.add(cone);
+
+    // Tick marks — all segments for this axis in one LineSegments draw call.
+    const tickPts = [];
+    const numTicks = Math.floor(SHAFT / TICK_D);
+    for (let n = 1; n <= numTicks; n++) {
+      const base = dir.clone().multiplyScalar(n * TICK_D);
+      for (const perp of [t1, t2]) {
+        tickPts.push(base.clone().addScaledVector(perp,  TICK_S));
+        tickPts.push(base.clone().addScaledVector(perp, -TICK_S));
+      }
+    }
+    group.add(new THREE.LineSegments(
+      new THREE.BufferGeometry().setFromPoints(tickPts),
+      new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.55 }),
+    ));
+
+    // Axis letter label
+    group.add(makeAxisLabel(name, color, dir.clone().multiplyScalar(SHAFT + CONE_L + 5)));
+  });
+
+  return group;
 }
 
 export function initViewer(canvas) {
@@ -44,6 +140,9 @@ export function initViewer(canvas) {
   grid = new THREE.GridHelper(200, 20, 0x335, 0x223);
   grid.rotation.x = Math.PI / 2; // into XY plane for Z-up
   scene.add(grid);
+
+  axisGroup = buildAxisGroup();
+  scene.add(axisGroup);
 
   controls = new OrbitControls(camera, canvas);
   controls.enableDamping = true;
@@ -171,7 +270,9 @@ function frameFrom(dirVec, up) {
   camera.near = r / 100;
   camera.far = r * 100;
   camera.updateProjectionMatrix();
-  grid.scale.setScalar(Math.max(r / 100, 0.2));
+  const s = Math.max(r / 100, 0.2);
+  grid.scale.setScalar(s);
+  axisGroup.scale.setScalar(s);
   controls.update();
 }
 
@@ -232,6 +333,7 @@ export function captureMultiView(maxDim = 1024) {
     target: controls.target.clone(),
     near: camera.near, far: camera.far,
     gridScale: grid.scale.x,
+    axisScale: axisGroup.scale.x,
   };
 
   const src = renderer.domElement;
@@ -273,6 +375,7 @@ export function captureMultiView(maxDim = 1024) {
   camera.updateProjectionMatrix();
   controls.target.copy(saved.target);
   grid.scale.setScalar(saved.gridScale);
+  axisGroup.scale.setScalar(saved.axisScale);
   controls.update();
   renderer.render(scene, camera);
 
@@ -286,6 +389,7 @@ export function captureMultiView(maxDim = 1024) {
 
 export function toggleGrid() {
   grid.visible = !grid.visible;
+  axisGroup.visible = grid.visible;
   return grid.visible;
 }
 
