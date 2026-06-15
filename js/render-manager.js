@@ -9,8 +9,8 @@ const WORKER_URL = new URL('./worker/openscad-worker.js', import.meta.url);
 
 const DEBOUNCE_MS = { code: 800, params: 300, settings: 100, project: 0 };
 const QUALITY_DEFINES = {
-  draft: { $fn: 16 },
-  preview: { $fn: 32 },
+  draft: { $fn: 24 },
+  preview: { $fn: 48 },
   final: {},
 };
 

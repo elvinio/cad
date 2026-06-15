@@ -15,6 +15,13 @@ import { emit } from './state.js';
 import { signIn, signOut, isSignedIn } from './gdrive.js';
 import { toast } from './ui.js';
 
+export function setQuality(q) {
+  saveSettings({ quality: q });
+  document.getElementById('set-quality').value = q;
+  document.getElementById('custom-quality').hidden = q !== 'custom';
+  emit('settings:changed', { settings: getSettings() });
+}
+
 export function initSettings() {
   const $ = id => document.getElementById(id);
   const settings = getSettings();

@@ -10,7 +10,8 @@ import { initProjects, loadInitialProject, renderList as renderProjects,
 import { initLibraries, renderList as renderLibraries, ensureInstalledLibsCached } from './libraries.js';
 import { initRenderManager, requestRender } from './render-manager.js';
 import { initExport } from './export.js';
-import { initSettings } from './settings.js';
+import { initSettings, setQuality } from './settings.js';
+import { getSettings } from './storage.js';
 import { syncProjects } from './gdrive.js';
 import { initDocs } from './docs.js';
 import { initChat } from './chat.js';
@@ -97,10 +98,22 @@ async function boot() {
     e.currentTarget.textContent = mode[0].toUpperCase() + mode.slice(1);
   });
 
+  const qualityBtn = $('quality-toggle-btn');
+  const syncQualityBtn = () => {
+    const q = getSettings().quality;
+    qualityBtn.textContent = q === 'draft' ? 'Draft' : 'Prev';
+  };
+  syncQualityBtn();
+  qualityBtn.addEventListener('click', () => {
+    const next = getSettings().quality === 'draft' ? 'preview' : 'draft';
+    setQuality(next);
+    syncQualityBtn();
+  });
+
   // Wiring: edits and settings changes trigger renders
   subscribe('code:changed', ({ immediate }) => requestRender(immediate ? 'project' : 'code'));
   subscribe('params:changed', () => requestRender('params'));
-  subscribe('settings:changed', () => requestRender('settings'));
+  subscribe('settings:changed', () => { requestRender('settings'); syncQualityBtn(); });
   subscribe('libs:changed', () => requestRender('settings'));
   subscribe('project:changed', ({ project }) => {
     clearHistory();
