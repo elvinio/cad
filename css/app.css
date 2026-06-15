@@ -424,19 +424,19 @@ dialog h3 { margin: 18px 0 8px; font-size: 14px; color: var(--muted); }
 
 .hint { font-size: 12px; color: var(--muted); margin: 6px 0; }
 
-#projects-list, #libraries-list {
+#projects-list, #libraries-list, #assemblies-list {
   list-style: none;
   margin: 0;
   padding: 0;
 }
-#projects-list li, #libraries-list li, #chat-history-list li {
+#projects-list li, #libraries-list li, #chat-history-list li, #assemblies-list li {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 10px 4px;
   border-bottom: 1px solid var(--border);
 }
-#projects-list .p-open, #chat-history-list .p-open {
+#projects-list .p-open, #chat-history-list .p-open, #assemblies-list .p-open {
   flex: 1;
   min-width: 0;
   background: none;
@@ -447,8 +447,8 @@ dialog h3 { margin: 18px 0 8px; font-size: 14px; color: var(--muted); }
   cursor: pointer;
   padding: 4px 0;
 }
-#projects-list .p-open .meta, #chat-history-list .p-open .meta { display: block; font-size: 11px; color: var(--muted); }
-#projects-list .p-open.current, #chat-history-list .p-open.current { color: var(--accent); }
+#projects-list .p-open .meta, #chat-history-list .p-open .meta, #assemblies-list .p-open .meta { display: block; font-size: 11px; color: var(--muted); }
+#projects-list .p-open.current, #chat-history-list .p-open.current, #assemblies-list .p-open.current { color: var(--accent); }
 .li-btn {
   background: none;
   border: none;
@@ -790,4 +790,94 @@ dialog h3 { margin: 18px 0 8px; font-size: 14px; color: var(--muted); }
   padding: 8px;
   font-size: 12px;
   font-family: ui-monospace, monospace;
+}
+
+/* ---------- Assembly mode (shell mode toggled by body.mode-assembly) ---------- */
+/* Parts tab only exists in assembly mode; Code + Doc only in scad mode. */
+.tab-assembly { display: none; }
+body.mode-assembly .tab-assembly { display: block; }
+body.mode-assembly [data-tab="code-view"],
+body.mode-assembly [data-tab="doc-view"] { display: none; }
+
+#parts-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+#add-part-btn {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+#clearance-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+#clearance-value { min-width: 56px; }
+#parts-list { list-style: none; margin: 0; padding: 0; }
+#parts-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+#parts-list li.selected { background: var(--panel); }
+#parts-list .part-name {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  color: var(--fg);
+  text-align: left;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 0;
+}
+#parts-list .part-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  flex: none;
+}
+#fit-readout { padding: 8px; }
+#fit-readout .fit-pair {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}
+#fit-readout .fit-clash { color: var(--error); font-weight: 700; }
+#fit-readout .fit-tight { color: var(--accent); }
+
+/* ---------- Param-set bar (top of the Param tab) ---------- */
+#paramset-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+#paramset-select {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px;
+  font-size: 13px;
 }

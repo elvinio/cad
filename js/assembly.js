@@ -1,0 +1,300 @@
+// Assembly document controller + Parts-tab UI.
+//
+// Manages the assembly data model (parts + placement) and the Parts panel.
+// Does NO 3D / Three.js / geometry work — that lives in the viewer and talks to
+// this module ONLY through the event bus.
+//
+// Bus topics EMITTED here:
+//   assembly:active            {assembly}            an assembly became the active document
+//   assembly:parts-changed     {assembly}            parts added/removed/visibility/color/source edited
+//   assembly:clearance-changed {clearance}           clearance slider moved
+//   part:select                {id|null}             user clicked a part row (request gizmo attach)
+//
+// Bus topics SUBSCRIBED here (emitted by the viewer — defensive, may never fire):
+//   part:moved      {id, transform}                  viewer drag-end -> write transform + autosave
+//   part:selected   {id|null}                         highlight matching row
+//   fit:updated     {pairs:[{a,b,clash,gap}]}         render the fit readout
+
+import { listAssemblies, getAssembly, saveAssembly, deleteAssembly,
+         createAssembly, listProjects } from './storage.js';
+import { emit, subscribe } from './state.js';
+import { toast } from './ui.js';
+
+const DEFAULT_PART_COLOR = '#cccccc';
+
+let active = null;
+let els = null;
+
+export function initAssembly(elements) {
+  els = elements;
+
+  els.newBtn.addEventListener('click', () => newAssembly());
+  els.addPartBtn.addEventListener('click', () => addPart());
+
+  els.clearanceSlider.addEventListener('input', () => {
+    const clearance = parseFloat(els.clearanceSlider.value);
+    if (active) {
+      active.clearance = clearance;
+      autosave();
+    }
+    updateClearanceLabel(clearance);
+    emit('assembly:clearance-changed', { clearance });
+  });
+
+  // Viewer -> here (defensive: the viewer may not exist yet this round).
+  subscribe('part:moved', ({ id, transform }) => {
+    if (!active) return;
+    const part = active.parts.find(p => p.id === id);
+    if (!part) return;
+    part.transform = transform;
+    autosave();
+  });
+
+  subscribe('part:selected', ({ id }) => {
+    if (!els || !els.partsList) return;
+    els.partsList.querySelectorAll('li').forEach(li =>
+      li.classList.toggle('selected', li.dataset.id === id));
+  });
+
+  subscribe('fit:updated', ({ pairs }) => renderFit(pairs));
+}
+
+export function getActiveAssembly() {
+  return active;
+}
+
+function setActive(assembly) {
+  active = assembly;
+  document.getElementById('project-name').textContent = assembly.name;
+  emit('assembly:active', { assembly });
+  renderParts();
+  syncClearanceUI();
+}
+
+function autosave() {
+  if (!active) return;
+  if (!saveAssembly(active)) toast('Storage full — assembly not saved!', 'error');
+}
+
+function syncClearanceUI() {
+  if (!els || !active) return;
+  els.clearanceSlider.value = active.clearance;
+  updateClearanceLabel(active.clearance);
+}
+
+function updateClearanceLabel(clearance) {
+  if (els && els.clearanceValue) {
+    els.clearanceValue.textContent = `${Number(clearance).toFixed(2)} mm`;
+  }
+}
+
+function newAssembly() {
+  const name = prompt('Assembly name:', `assembly-${listAssemblies().length + 1}`);
+  if (!name) return;
+  const assembly = createAssembly(name);
+  setActive(assembly);
+  renderList();
+  els.list.closest('dialog')?.close();
+}
+
+// ----- Assemblies dialog list -----
+
+export function renderList() {
+  if (!els || !els.list) return;
+  els.list.textContent = '';
+  const assemblies = listAssemblies().sort((a, b) => b.modified - a.modified);
+  for (const assembly of assemblies) {
+    const li = document.createElement('li');
+
+    const open = document.createElement('button');
+    open.className = 'p-open' + (active && assembly.id === active.id ? ' current' : '');
+    const meta = new Date(assembly.modified).toLocaleString()
+      + (assembly.driveFileId ? ' · synced' : '');
+    open.innerHTML = `${escapeHtml(assembly.name)}<span class="meta">${escapeHtml(meta)}</span>`;
+    open.addEventListener('click', () => {
+      setActive(getAssembly(assembly.id));
+      els.list.closest('dialog')?.close();
+    });
+    li.appendChild(open);
+
+    li.appendChild(iconBtn('✎', 'Rename', () => {
+      const name = prompt('Rename assembly:', assembly.name);
+      if (!name) return;
+      const a = getAssembly(assembly.id);
+      a.name = name;
+      saveAssembly(a);
+      if (active && active.id === a.id) setActive(a);
+      renderList();
+    }));
+
+    li.appendChild(iconBtn('⧉', 'Duplicate', () => {
+      const a = getAssembly(assembly.id);
+      const copy = createAssembly(`${a.name} copy`);
+      copy.clearance = a.clearance;
+      copy.parts = a.parts.map(p => ({
+        ...p,
+        id: crypto.randomUUID(),
+        source: { ...p.source },
+        transform: { ...p.transform },
+      }));
+      saveAssembly(copy);
+      renderList();
+    }));
+
+    li.appendChild(iconBtn('🗑', 'Delete', () => {
+      if (!confirm(`Delete assembly "${assembly.name}"?`)) return;
+      deleteAssembly(assembly.id);
+      if (active && active.id === assembly.id) active = null;
+      renderList();
+    }));
+
+    els.list.appendChild(li);
+  }
+}
+
+// ----- Parts panel -----
+
+function renderParts() {
+  if (!els || !els.partsList) return;
+  els.partsList.textContent = '';
+
+  if (!active || active.parts.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'hint';
+    p.textContent = 'No parts yet. Add a part from one of your scad projects.';
+    els.partsList.appendChild(p);
+    return;
+  }
+
+  for (const part of active.parts) {
+    const li = document.createElement('li');
+    li.dataset.id = part.id;
+
+    const swatch = document.createElement('span');
+    swatch.className = 'part-swatch';
+    swatch.style.background = part.color || DEFAULT_PART_COLOR;
+    // Click the swatch to recolor the part.
+    swatch.title = 'Change color';
+    swatch.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const color = prompt('Part color (#rrggbb):', part.color || DEFAULT_PART_COLOR);
+      if (!color) return;
+      part.color = color;
+      swatch.style.background = color;
+      autosave();
+      emit('assembly:parts-changed', { assembly: active });
+    });
+    li.appendChild(swatch);
+
+    const name = document.createElement('button');
+    name.className = 'part-name';
+    name.textContent = part.name;
+    name.addEventListener('click', () => {
+      els.partsList.querySelectorAll('li').forEach(row =>
+        row.classList.toggle('selected', row === li));
+      emit('part:select', { id: part.id });
+    });
+    li.appendChild(name);
+
+    li.appendChild(iconBtn(part.visible ? '👁' : '🚫', 'Toggle visibility', () => {
+      part.visible = !part.visible;
+      autosave();
+      emit('assembly:parts-changed', { assembly: active });
+      renderParts();
+    }));
+
+    li.appendChild(iconBtn('🗑', 'Delete part', () => {
+      if (!confirm(`Remove part "${part.name}"?`)) return;
+      active.parts = active.parts.filter(p => p.id !== part.id);
+      autosave();
+      emit('assembly:parts-changed', { assembly: active });
+      emit('part:select', { id: null });
+      renderParts();
+    }));
+
+    els.partsList.appendChild(li);
+  }
+}
+
+function addPart() {
+  if (!active) {
+    toast('Open or create an assembly first.', 'error');
+    return;
+  }
+  const projects = listProjects();
+  if (projects.length === 0) {
+    toast('No scad projects to add. (STL import coming soon.)', 'error');
+    return;
+  }
+
+  const menu = projects.map((p, i) => `${i + 1}. ${p.name}`).join('\n');
+  const choice = prompt(`Add part from project:\n${menu}`, '1');
+  if (!choice) return;
+  const idx = parseInt(choice, 10) - 1;
+  const project = projects[idx];
+  if (!project) {
+    toast('No such project.', 'error');
+    return;
+  }
+
+  const part = {
+    id: crypto.randomUUID(),
+    name: project.name,
+    source: { type: 'scad', projectId: project.id, overrides: {} },
+    transform: { pos: [0, 0, 0], rot: [0, 0, 0], scale: 1 },
+    color: DEFAULT_PART_COLOR,
+    visible: true,
+  };
+  active.parts.push(part);
+  autosave();
+  emit('assembly:parts-changed', { assembly: active });
+  renderParts();
+}
+
+// ----- Fit readout -----
+
+function renderFit(pairs) {
+  if (!els || !els.fitReadout) return;
+  els.fitReadout.textContent = '';
+  if (!active || !pairs || pairs.length === 0) return;
+
+  const nameOf = id => {
+    const part = active.parts.find(p => p.id === id);
+    return part ? part.name : id;
+  };
+
+  for (const pair of pairs) {
+    const row = document.createElement('div');
+    row.className = 'fit-row';
+    const label = `${nameOf(pair.a)} ↔ ${nameOf(pair.b)}`;
+
+    const status = document.createElement('span');
+    if (pair.clash) {
+      status.className = 'fit-clash';
+      status.textContent = 'clash';
+    } else {
+      const tight = pair.gap < active.clearance;
+      status.className = tight ? 'fit-tight' : '';
+      status.textContent = `${Number(pair.gap).toFixed(2)} mm`;
+    }
+
+    row.textContent = `${label}: `;
+    row.appendChild(status);
+    els.fitReadout.appendChild(row);
+  }
+}
+
+// ----- helpers (mirrored from projects.js) -----
+
+function iconBtn(char, title, onClick) {
+  const b = document.createElement('button');
+  b.className = 'li-btn';
+  b.textContent = char;
+  b.title = title;
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+}

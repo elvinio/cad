@@ -5,6 +5,8 @@ import { initUI, toast } from './ui.js';
 import { initViewer, fitView, setView, cycleDisplayMode, toggleGrid } from './viewer.js';
 import { initEditor, getCode, setCode, clearHistory, canUndo, canRedo, undo, redo, insertText } from './editor.js';
 import { initCustomizer, getParamValues, setParamValues } from './customizer.js';
+import { initParamSets } from './paramsets.js';
+import { initAssembly, renderList as renderAssemblies } from './assembly.js';
 import { initProjects, loadInitialProject, renderList as renderProjects,
          updateActiveCode, updateActiveParams } from './projects.js';
 import { initLibraries, renderList as renderLibraries, ensureInstalledLibsCached } from './libraries.js';
@@ -41,10 +43,26 @@ async function boot() {
     insertText(btn.dataset.key);
   });
   initCustomizer($('customizer-form'), { onValuesChanged: updateActiveParams });
+  initParamSets({
+    select: $('paramset-select'),
+    saveBtn: $('paramset-save'),
+    saveAsBtn: $('paramset-saveas'),
+    renameBtn: $('paramset-rename'),
+    deleteBtn: $('paramset-delete'),
+  });
   initProjects({
     dialog: $('projects-dialog'),
     list: $('projects-list'),
     newBtn: $('new-project-btn'),
+  });
+  initAssembly({
+    list: $('assemblies-list'),
+    newBtn: $('new-assembly-btn'),
+    partsList: $('parts-list'),
+    addPartBtn: $('add-part-btn'),
+    clearanceSlider: $('clearance-slider'),
+    clearanceValue: $('clearance-value'),
+    fitReadout: $('fit-readout'),
   });
   initLibraries({
     dialog: $('libraries-dialog'),
@@ -67,11 +85,13 @@ async function boot() {
   // Menu navigation
   $('project-btn').addEventListener('click', () => {
     renderProjects();
+    renderAssemblies();
     $('projects-dialog').showModal();
   });
   $('menu-projects').addEventListener('click', () => {
     $('menu-dialog').close();
     renderProjects();
+    renderAssemblies();
     $('projects-dialog').showModal();
   });
   $('menu-libraries').addEventListener('click', () => {
@@ -120,10 +140,23 @@ async function boot() {
   subscribe('settings:changed', () => { requestRender('settings'); syncQualityBtn(); });
   subscribe('libs:changed', () => requestRender('settings'));
   subscribe('project:changed', ({ project }) => {
+    // Opening a scad project leaves assembly mode (if we were in it).
+    if (document.body.classList.contains('mode-assembly')) {
+      document.body.classList.remove('mode-assembly');
+      const partsTab = document.querySelector('.tab[data-tab="parts-view"]');
+      if (partsTab && partsTab.classList.contains('active')) {
+        document.querySelector('.tab[data-tab="code-view"]').click();
+      }
+    }
     clearHistory();
     setCode(project.code);
     setParamValues(project.paramValues);
     requestRender('project');
+  });
+  // Opening an assembly switches the shell into assembly mode and reveals Parts.
+  subscribe('assembly:active', () => {
+    document.body.classList.add('mode-assembly');
+    document.querySelector('.tab[data-tab="parts-view"]').click();
   });
 
   ensureInstalledLibsCached();
