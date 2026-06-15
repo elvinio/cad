@@ -2,6 +2,7 @@
 
 import { subscribe } from './state.js';
 import { jumpToLine, setErrorLines, clearErrorLines } from './editor.js';
+import { applyFullscreenZoom } from './viewer.js';
 
 export function toast(message, kind = 'info', ms = 3500) {
   const container = document.getElementById('toast-container');
@@ -72,6 +73,7 @@ export function initUI() {
     viewerPanel.classList.toggle('maximized', on);
     maximizeBtn.innerHTML = on ? '&#x2715;' : '&#x26F6;';
     maximizeBtn.title = on ? 'Restore viewer' : 'Maximize viewer';
+    applyFullscreenZoom(on);
   };
   maximizeBtn.addEventListener('click', () => setMaximized(!viewerPanel.classList.contains('maximized')));
   document.addEventListener('keydown', (e) => {

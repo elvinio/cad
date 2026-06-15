@@ -7,6 +7,7 @@ import { getSettings } from './storage.js';
 
 let renderer, scene, camera, controls, mesh, grid, highlightMesh;
 let firstFit = true;
+let preFsDist = null;
 let meshStats = null; // { triangles, size:[dx,dy,dz] } for the current mesh
 
 // Display mode for the model material. Persists across re-renders (each render
@@ -281,6 +282,28 @@ export function captureMultiView(maxDim = 1024) {
     data: dataUrl.slice(dataUrl.indexOf(',') + 1),
     views: MULTIVIEW_VIEWS.slice(),
   };
+}
+
+export function toggleGrid() {
+  grid.visible = !grid.visible;
+  return grid.visible;
+}
+
+// Save the camera distance when entering fullscreen and zoom out 2× (50% zoom).
+// Restore the pre-fullscreen distance when leaving, preserving any rotation/pan
+// the user did while maximized.
+export function applyFullscreenZoom(enter) {
+  if (!camera || !controls) return;
+  const dir = camera.position.clone().sub(controls.target);
+  const dist = dir.length();
+  if (enter) {
+    preFsDist = dist;
+    camera.position.copy(controls.target).addScaledVector(dir.normalize(), dist * 2);
+  } else if (preFsDist !== null) {
+    camera.position.copy(controls.target).addScaledVector(dir.normalize(), preFsDist);
+    preFsDist = null;
+  }
+  controls.update();
 }
 
 export function getMeshStats() {

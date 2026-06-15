@@ -2,7 +2,7 @@
 
 import { subscribe } from './state.js';
 import { initUI, toast } from './ui.js';
-import { initViewer, fitView, setView, cycleDisplayMode } from './viewer.js';
+import { initViewer, fitView, setView, cycleDisplayMode, toggleGrid } from './viewer.js';
 import { initEditor, getCode, setCode, clearHistory, canUndo, canRedo, undo, redo, insertText } from './editor.js';
 import { initCustomizer, getParamValues, setParamValues } from './customizer.js';
 import { initProjects, loadInitialProject, renderList as renderProjects,
@@ -88,7 +88,11 @@ async function boot() {
       toast(`Sync failed: ${e.message}`, 'error');
     }
   });
-  $('reset-view-btn').addEventListener('click', fitView);
+  const gridBtn = $('grid-toggle-btn');
+  gridBtn.addEventListener('click', () => {
+    const visible = toggleGrid();
+    gridBtn.classList.toggle('grid-off', !visible);
+  });
   $('view-presets').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-view]');
     if (btn) setView(btn.dataset.view);
