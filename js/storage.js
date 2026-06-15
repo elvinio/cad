@@ -91,6 +91,85 @@ export function createProject(name, code) {
   return project;
 }
 
+// ---------- Assemblies ----------
+// Parallel to projects: each is a `scadpad.assembly/1` document (parts +
+// placement only — geometry referenced, never embedded). Tracked by a SEPARATE
+// index key so they never mix with the projects index.
+const ASSEMBLIES_INDEX_KEY = `${PREFIX}.assemblies.index`;
+
+export function listAssemblies() {
+  const ids = read(ASSEMBLIES_INDEX_KEY, []);
+  return ids.map(id => getAssembly(id)).filter(Boolean);
+}
+
+export function getAssembly(id) {
+  return read(`${PREFIX}.assembly.${id}`, null);
+}
+
+export function saveAssembly(assembly) {
+  assembly.modified = Date.now();
+  const ok = write(`${PREFIX}.assembly.${assembly.id}`, assembly);
+  const ids = read(ASSEMBLIES_INDEX_KEY, []);
+  if (!ids.includes(assembly.id)) {
+    ids.push(assembly.id);
+    write(ASSEMBLIES_INDEX_KEY, ids);
+  }
+  return ok;
+}
+
+// Save without restamping `modified` (used when applying remote timestamps).
+export function saveAssemblyRaw(assembly) {
+  const ok = write(`${PREFIX}.assembly.${assembly.id}`, assembly);
+  const ids = read(ASSEMBLIES_INDEX_KEY, []);
+  if (!ids.includes(assembly.id)) {
+    ids.push(assembly.id);
+    write(ASSEMBLIES_INDEX_KEY, ids);
+  }
+  return ok;
+}
+
+export function deleteAssembly(id) {
+  localStorage.removeItem(`${PREFIX}.assembly.${id}`);
+  write(ASSEMBLIES_INDEX_KEY, read(ASSEMBLIES_INDEX_KEY, []).filter(x => x !== id));
+}
+
+export function createAssembly(name) {
+  const assembly = {
+    schema: 'scadpad.assembly/1',
+    id: crypto.randomUUID(),
+    name,
+    modified: Date.now(),
+    driveFileId: null,
+    clearance: 0.2,
+    parts: [],
+  };
+  saveAssembly(assembly);
+  return assembly;
+}
+
+// ---------- Param sets (per project) ----------
+// One `scadpad.paramsets/1` document per project holding ALL its named sets.
+// Keyed by projectId; discovered per-project so there's no separate index.
+const paramSetsKey = projectId => `${PREFIX}.paramsets.${projectId}`;
+
+export function getParamSets(projectId) {
+  return read(paramSetsKey(projectId), null);
+}
+
+export function saveParamSets(projectId, doc) {
+  doc.modified = Date.now();
+  return write(paramSetsKey(projectId), doc);
+}
+
+// Save without restamping `modified` (used when applying remote timestamps).
+export function saveParamSetsRaw(projectId, doc) {
+  return write(paramSetsKey(projectId), doc);
+}
+
+export function deleteParamSets(projectId) {
+  localStorage.removeItem(paramSetsKey(projectId));
+}
+
 // ---------- Settings ----------
 
 export function getSettings() {
@@ -131,12 +210,21 @@ export function deleteChatSession(projectId, sessionId) {
 
 const DB_NAME = 'scadpad';
 const STORE = 'libzips';
+const STL_STORE = 'stlparts';
 
 function openDb() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
+    // v2 adds the `stlparts` store. Existing users already have `libzips` at
+    // v1, so the upgrade fires with that store present — guard each create.
+    const req = indexedDB.open(DB_NAME, 2);
     req.onupgradeneeded = () => {
-      req.result.createObjectStore(STORE, { keyPath: 'name' });
+      const db = req.result;
+      if (!db.objectStoreNames.contains(STORE)) {
+        db.createObjectStore(STORE, { keyPath: 'name' });
+      }
+      if (!db.objectStoreNames.contains(STL_STORE)) {
+        db.createObjectStore(STL_STORE, { keyPath: 'name' });
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -177,6 +265,48 @@ export async function clearLibZips() {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
     tx.objectStore(STORE).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// ---------- Imported STL bytes (IndexedDB) ----------
+// Mirrors the libzip store: binary part meshes referenced by assembly JSON.
+
+export async function putStlPart(name, bytes) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STL_STORE, 'readwrite');
+    tx.objectStore(STL_STORE).put({ name, bytes, importedAt: Date.now() });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function getStlPart(name) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(STL_STORE).objectStore(STL_STORE).get(name);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function deleteStlPart(name) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STL_STORE, 'readwrite');
+    tx.objectStore(STL_STORE).delete(name);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function clearStlParts() {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STL_STORE, 'readwrite');
+    tx.objectStore(STL_STORE).clear();
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });

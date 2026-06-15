@@ -2,7 +2,12 @@
 // + Drive REST API v3 over plain fetch. The user supplies their own
 // OAuth Client ID (Settings menu).
 
-import { getSettings, saveSettings, listProjects, saveProjectRaw } from './storage.js';
+import {
+  getSettings, saveSettings, listProjects, saveProjectRaw,
+  listAssemblies, getAssembly, saveAssemblyRaw, createAssembly,
+  getParamSets, saveParamSetsRaw,
+  getStlPart, putStlPart,
+} from './storage.js';
 import { importProject, getActiveProject } from './projects.js';
 import { toast } from './ui.js';
 
@@ -135,7 +140,8 @@ export async function syncProjects() {
   const q = encodeURIComponent(`'${folderId}' in parents and trashed=false`);
   const remote = await (await driveFetch(
     `${API}/files?q=${q}&fields=files(id,name,modifiedTime)&pageSize=1000`)).json();
-  const remoteFiles = (remote.files || []).filter(f => f.name.endsWith('.scad'));
+  const allRemote = remote.files || [];
+  const remoteFiles = allRemote.filter(f => f.name.endsWith('.scad'));
 
   const local = listProjects();
   const byDriveId = new Map(local.filter(p => p.driveFileId).map(p => [p.driveFileId, p]));
@@ -194,6 +200,212 @@ export async function syncProjects() {
     pulled++;
   }
 
+  // ---- New document types: assemblies + param-set sidecars (both .json) ----
+  // Drive only gives us name + modifiedTime in the listing; assemblies and
+  // param-sets are told apart only by the `schema` field INSIDE the JSON, so we
+  // fetch+parse the .json bodies once and route by schema.
+  const remoteJson = allRemote.filter(f => f.name.endsWith('.json'));
+  const parsed = [];        // { rf, doc }  for every successfully parsed .json
+  for (const rf of remoteJson) {
+    try {
+      const text = await (await driveFetch(`${API}/files/${rf.id}?alt=media`)).text();
+      parsed.push({ rf, doc: JSON.parse(text) });
+    } catch { /* unreadable / non-JSON — skip, never abort the sync */ }
+  }
+  const remoteAssemblies = parsed.filter(p => p.doc && p.doc.schema === 'scadpad.assembly/1');
+  const remoteParamSets = parsed.filter(p => p.doc && p.doc.schema === 'scadpad.paramsets/1');
+
+  const a = await syncAssemblies(folderId, remoteAssemblies);
+  const p = await syncParamSets(folderId, remoteParamSets, local);
+  pushed += a.pushed + p.pushed;
+  pulled += a.pulled + p.pulled;
+
   toast(`Sync complete: ${pushed} pushed, ${pulled} pulled`);
   return { pushed, pulled };
+}
+
+// Serialize a localStorage JSON doc to a Drive-bound Blob (stable, pretty).
+function jsonBlob(doc) {
+  return new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
+}
+
+// ---------- Assemblies <-> <name>.json (schema scadpad.assembly/1) ----------
+// Mirrors the project round-trip: byDriveId then byName, ±2s dead-zone
+// last-write-wins, saveAssemblyRaw to apply remote timestamps without restamp.
+async function syncAssemblies(folderId, remoteAssemblies) {
+  const local = listAssemblies();
+  const byDriveId = new Map(local.filter(x => x.driveFileId).map(x => [x.driveFileId, x]));
+  const byName = new Map(local.map(x => [`${x.name}.json`, x]));
+  const matchedRemoteIds = new Set();
+  const matchedLocalIds = new Set();
+  let pushed = 0, pulled = 0;
+
+  for (const { rf, doc } of remoteAssemblies) {
+    const asm = byDriveId.get(rf.id) || byName.get(rf.name);
+    if (!asm) continue;
+    matchedRemoteIds.add(rf.id);
+    matchedLocalIds.add(asm.id);
+    const remoteMs = Date.parse(rf.modifiedTime);
+    if (asm.modified > remoteMs + 2000) {
+      const res = await uploadFile(`${asm.name}.json`, jsonBlob(asm), folderId, rf.id);
+      asm.driveFileId = res.id;
+      asm.modified = Date.parse(res.modifiedTime);
+      saveAssemblyRaw(asm);
+      pushed++;
+    } else if (remoteMs > asm.modified + 2000) {
+      doc.id = asm.id;            // keep our local id stable on download
+      doc.driveFileId = rf.id;
+      doc.modified = remoteMs;
+      saveAssemblyRaw(doc);
+      pulled++;
+    } else if (!asm.driveFileId) {
+      asm.driveFileId = rf.id;
+      saveAssemblyRaw(asm);
+    }
+    // Whichever way it resolved, reconcile its STL parts in both directions
+    // against the now-current local copy.
+    const current = getAssembly(asm.id);
+    await ensureStlPartsLocal(current);
+    await ensureStlPartsRemote(current, folderId);
+  }
+
+  // Local assemblies with no remote counterpart -> push as new files
+  for (const asm of local) {
+    if (matchedLocalIds.has(asm.id)) continue;
+    const res = await uploadFile(`${asm.name}.json`, jsonBlob(asm), folderId);
+    asm.driveFileId = res.id;
+    asm.modified = Date.parse(res.modifiedTime);
+    saveAssemblyRaw(asm);
+    await ensureStlPartsRemote(asm, folderId);
+    pushed++;
+  }
+
+  // Remote assemblies with no local counterpart -> create locally
+  for (const { rf, doc } of remoteAssemblies) {
+    if (matchedRemoteIds.has(rf.id)) continue;
+    const created = createAssembly(doc.name || rf.name.replace(/\.json$/, ''));
+    const merged = { ...doc, id: created.id, driveFileId: rf.id,
+                     modified: Date.parse(rf.modifiedTime) };
+    saveAssemblyRaw(merged);
+    await ensureStlPartsLocal(merged);
+    pulled++;
+  }
+
+  return { pushed, pulled };
+}
+
+// ---------- Param sets <-> <projectName>.params.json (scadpad.paramsets/1) ----
+// Sidecar keyed in storage by projectId; the doc's `project` field also holds
+// the projectId. The Drive filename is <projectName>.params.json, so we resolve
+// project name <-> id via the local projects list. Last-write-wins like above.
+async function syncParamSets(folderId, remoteParamSets, localProjects) {
+  const byId = new Map(localProjects.map(pr => [pr.id, pr]));
+  const byName = new Map(localProjects.map(pr => [pr.name, pr]));
+  // Build the set of local param-set docs that actually exist.
+  const localDocs = localProjects
+    .map(pr => ({ project: pr, doc: getParamSets(pr.id) }))
+    .filter(x => x.doc);
+  const byDriveId = new Map(
+    localDocs.filter(x => x.doc.driveFileId).map(x => [x.doc.driveFileId, x]));
+  const matchedRemoteIds = new Set();
+  const matchedProjectIds = new Set();
+  let pushed = 0, pulled = 0;
+
+  const fileName = pr => `${pr.name}.params.json`;
+
+  for (const { rf, doc } of remoteParamSets) {
+    // Resolve which local project this sidecar belongs to.
+    let entry = byDriveId.get(rf.id);
+    if (!entry) {
+      // Match by the project the doc names, or by filename <name>.params.json.
+      const pr = byId.get(doc.project)
+        || byName.get(rf.name.replace(/\.params\.json$/, ''));
+      if (pr) entry = { project: pr, doc: getParamSets(pr.id) };
+    }
+    if (!entry || !entry.project) continue;   // orphan sidecar; nothing to attach to
+    const pr = entry.project;
+    matchedRemoteIds.add(rf.id);
+    matchedProjectIds.add(pr.id);
+    const localDoc = entry.doc;               // may be null if not present locally
+    const remoteMs = Date.parse(rf.modifiedTime);
+
+    if (localDoc && localDoc.modified > remoteMs + 2000) {
+      const res = await uploadFile(fileName(pr), jsonBlob(localDoc), folderId, rf.id);
+      localDoc.driveFileId = res.id;
+      localDoc.modified = Date.parse(res.modifiedTime);
+      saveParamSetsRaw(pr.id, localDoc);
+      pushed++;
+    } else if (!localDoc || remoteMs > (localDoc.modified || 0) + 2000) {
+      const merged = { ...doc, project: pr.id, driveFileId: rf.id, modified: remoteMs };
+      saveParamSetsRaw(pr.id, merged);
+      pulled++;
+    } else if (localDoc && !localDoc.driveFileId) {
+      localDoc.driveFileId = rf.id;
+      saveParamSetsRaw(pr.id, localDoc);
+    }
+  }
+
+  // Local sidecars with no remote counterpart -> push as new files
+  for (const { project: pr, doc } of localDocs) {
+    if (matchedProjectIds.has(pr.id)) continue;
+    if (doc.driveFileId && matchedRemoteIds.has(doc.driveFileId)) continue;
+    const res = await uploadFile(fileName(pr), jsonBlob(doc), folderId);
+    doc.driveFileId = res.id;
+    doc.modified = Date.parse(res.modifiedTime);
+    saveParamSetsRaw(pr.id, doc);
+    pushed++;
+  }
+
+  // Remote sidecars whose project doesn't exist locally are skipped: there's no
+  // project to attach them to (a .params.json with no matching .scad). They'll
+  // attach on a later sync once the project is pulled.
+  return { pushed, pulled };
+}
+
+// ---------- Imported STL parts (IndexedDB <-> Drive .stl) ----------
+// Best-effort and resilient: a missing/failed STL must never abort the sync.
+
+function stlRefs(assembly) {
+  return (assembly && Array.isArray(assembly.parts) ? assembly.parts : [])
+    .filter(p => p && p.source && p.source.type === 'stl' && p.source.ref)
+    .map(p => p.source.ref);
+}
+
+// Look up a Drive file by exact name in the cad folder (returns {id} or null).
+async function findRemoteByName(name, folderId) {
+  try {
+    const q = encodeURIComponent(
+      `name='${name.replace(/'/g, "\\'")}' and '${folderId}' in parents and trashed=false`);
+    const res = await (await driveFetch(`${API}/files?q=${q}&fields=files(id,name)`)).json();
+    return (res.files && res.files[0]) || null;
+  } catch { return null; }
+}
+
+// For every STL the assembly references that isn't in IndexedDB, pull it down.
+async function ensureStlPartsLocal(assembly) {
+  for (const ref of stlRefs(assembly)) {
+    try {
+      const have = await getStlPart(ref);
+      if (have) continue;
+      const remote = await findRemoteByName(ref, getSettings().driveFolderId);
+      if (!remote) continue;
+      const buf = await (await driveFetch(`${API}/files/${remote.id}?alt=media`)).arrayBuffer();
+      await putStlPart(ref, new Uint8Array(buf));
+    } catch { /* one bad STL must not break the whole sync */ }
+  }
+}
+
+// For every STL the assembly references that lives locally but not on Drive,
+// upload it. Uses findRemoteByName to avoid duplicating an already-pushed file.
+async function ensureStlPartsRemote(assembly, folderId) {
+  for (const ref of stlRefs(assembly)) {
+    try {
+      const local = await getStlPart(ref);
+      if (!local) continue;
+      const remote = await findRemoteByName(ref, folderId);
+      if (remote) continue;            // already on Drive
+      await uploadFile(ref,
+        new Blob([local.bytes], { type: 'application/octet-stream' }), folderId);
+    } catch { /* best-effort */ }
+  }
 }

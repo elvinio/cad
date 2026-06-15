@@ -13,7 +13,8 @@
 {
   "imports": {
     "three": "./vendor/three/three.module.js",
-    "three/addons/": "./vendor/three/"
+    "three/addons/": "./vendor/three/",
+    "three-mesh-bvh": "./vendor/three-mesh-bvh/index.module.js"
   }
 }
 </script>
@@ -52,6 +53,7 @@
   <section id="bottom-panel">
     <nav id="panel-tabs">
       <button class="tab active" data-tab="code-view">Code</button>
+      <button class="tab tab-assembly" data-tab="parts-view">Parts</button>
       <button class="tab" data-tab="customizer-view">Param</button>
       <button class="tab" data-tab="chat-view">Chat</button>
       <button class="tab" data-tab="console-view">Console <span id="error-badge" hidden>!</span></button>
@@ -82,7 +84,25 @@
           autocorrect="off" wrap="off" placeholder="// OpenSCAD code&#10;cube(10);"></textarea>
       </div>
     </div>
+    <div id="parts-view" class="tab-view">
+      <div id="parts-toolbar">
+        <button id="add-part-btn" title="Add a part to this assembly">+ Add part</button>
+        <label id="clearance-control" title="Minimum gap (mm) before a pair is flagged">
+          Clearance <input id="clearance-slider" type="range" min="0" max="2" step="0.05" value="0.2">
+          <span id="clearance-value">0.20 mm</span>
+        </label>
+      </div>
+      <ul id="parts-list"></ul>
+      <div id="fit-readout"><p class="hint">Add two or more parts to see fit results.</p></div>
+    </div>
     <div id="customizer-view" class="tab-view">
+      <div id="paramset-bar">
+        <select id="paramset-select" title="Saved parameter sets"></select>
+        <button id="paramset-save" class="icon-btn" title="Save current values into this set">&#128190;</button>
+        <button id="paramset-saveas" class="icon-btn" title="Save as a new set">&#10133;</button>
+        <button id="paramset-rename" class="icon-btn" title="Rename this set">&#9998;</button>
+        <button id="paramset-delete" class="icon-btn" title="Delete this set">&#128465;</button>
+      </div>
       <div id="customizer-form"><p class="hint">Render once to extract parameters.</p></div>
     </div>
     <div id="console-view" class="tab-view">
@@ -150,6 +170,11 @@
   <ul id="projects-list"></ul>
   <div class="dialog-actions">
     <button id="new-project-btn">+ New project</button>
+  </div>
+  <h2>Assemblies</h2>
+  <ul id="assemblies-list"></ul>
+  <div class="dialog-actions">
+    <button id="new-assembly-btn">+ New assembly</button>
   </div>
   <form method="dialog"><button class="close-btn">Close</button></form>
 </dialog>

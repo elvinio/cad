@@ -52,6 +52,19 @@ export function applyParamOverrides(partial) {
   return { unknown };
 }
 
+// Replace the WHOLE overrides map with a saved param set's values, reconciled
+// against the current schema (drops unknown/changed params like reconcile()),
+// then persist + re-render exactly like a manual edit. One call applies a named
+// set; the form, autosave (onValuesChanged), and a re-render (params:changed)
+// all follow. Mirrors applyParamOverrides' persist+re-render tail.
+export function applyParamSet(set) {
+  values = { ...(set || {}) };
+  reconcile();
+  onValuesChanged(getParamValues());
+  emit('params:changed', {});
+  renderForm();
+}
+
 function normalize(parameterSet) {
   const params = parameterSet && parameterSet.parameters;
   return Array.isArray(params) ? params.filter(p => p.group !== 'Hidden') : [];
