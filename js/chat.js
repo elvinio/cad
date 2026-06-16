@@ -845,16 +845,6 @@ async function send() {
       };
       lastStop = final.stop_reason;
 
-      // Per-turn trace: cache_read > 0 confirms the prefix is being reused.
-      console.log(`[chat] turn ${turnsUsed}/${maxTurns}`, {
-        model: settings.chatModel,
-        input_tokens: final.usage.input_tokens,
-        output_tokens: final.usage.output_tokens,
-        cache_read_input_tokens: final.usage.cache_read_input_tokens || 0,
-        cache_creation_input_tokens: final.usage.cache_creation_input_tokens || 0,
-        stop_reason: final.stop_reason,
-      });
-
       if (text) {
         renderMessageBody(assistantBody, text);
         setBubbleStats(assistantBubble, lastMeta);
@@ -908,27 +898,6 @@ async function send() {
   if (!failed && assistantTextParts.length) {
     history.push({ role: 'assistant', content: assistantTextParts.join('\n\n'), ts: Date.now(), meta: lastMeta });
   }
-
-  // Per-send summary: turns taken, token totals (uncached in / out, plus cached
-  // reads + writes), and the cache-aware cost estimate.
-  if (turnsUsed > 0) {
-    console.log('[chat] send complete', {
-      model: settings.chatModel,
-      turns: turnsUsed,
-      durationMs: Date.now() - startedAt,
-      input_tokens: totalIn,
-      output_tokens: totalOut,
-      cache_read_input_tokens: totalCacheRead,
-      cache_creation_input_tokens: totalCacheCreate,
-      cost_usd: estimateCostUsd(settings.chatModel, {
-        input_tokens: totalIn,
-        output_tokens: totalOut,
-        cache_read_input_tokens: totalCacheRead,
-        cache_creation_input_tokens: totalCacheCreate,
-      }),
-    });
-  }
-
   persistCurrentSession();
 }
 
