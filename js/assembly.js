@@ -389,8 +389,6 @@ function initTransformPanel() {
     if (!btn || !active || !selectedPartId) return;
     const part = active.parts.find(p => p.id === selectedPartId);
     if (!part) return;
-    e.preventDefault();
-    btn.setPointerCapture(e.pointerId);
     const prop = btn.dataset.prop;
     const dir = parseFloat(btn.dataset.d);
     _clearHold();
@@ -399,8 +397,9 @@ function initTransformPanel() {
     _holdTimer = setTimeout(() => _scheduleHold(part, prop, dir), 400);
   });
 
-  panel.addEventListener('pointerup', _clearHold);
-  panel.addEventListener('pointercancel', _clearHold);
+  // Listen on document so release is caught even if finger/pointer drifts off the button
+  document.addEventListener('pointerup', _clearHold);
+  document.addEventListener('pointercancel', _clearHold);
 
   panel.addEventListener('change', (e) => {
     const inp = e.target.closest('.txp-inp');
