@@ -268,6 +268,7 @@ async function getClient() {
 
 // Input/output price per million tokens, used for the per-message cost estimate.
 const MODEL_PRICING = {
+  'claude-opus-4-8':   { in: 5, out: 25 },
   'claude-sonnet-4-6': { in: 3, out: 15 },
   'claude-haiku-4-5':  { in: 1, out: 5 },
 };
@@ -868,6 +869,19 @@ async function send() {
     history.push({ role: 'assistant', content: assistantTextParts.join('\n\n'), ts: Date.now(), meta: lastMeta });
   }
   persistCurrentSession();
+}
+
+// Fill the chat composer with prefilled text and bring it into view, without
+// sending. Used by the console's "Ask Claude to fix" button to hand off a render
+// error as a ready-to-send prompt. Switches to the Chat tab and focuses the input.
+export function seedChatInput(text) {
+  const input = $('chat-input');
+  if (!input) return;
+  document.querySelector('[data-tab="chat-view"]')?.click();
+  input.value = text;
+  input.dispatchEvent(new Event('input')); // auto-grow + any listeners
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
 }
 
 // ---------- session persistence ----------
