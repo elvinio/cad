@@ -267,10 +267,14 @@ async function getClient() {
 // ---------- message rendering ----------
 
 // Input/output price per million tokens, used for the per-message cost estimate.
+// Cached input is billed separately: reads ~0.1x, writes (5-min TTL) ~1.25x of
+// the base input rate. usage.input_tokens is the UNCACHED remainder only.
 const MODEL_PRICING = {
   'claude-sonnet-4-6': { in: 3, out: 15 },
   'claude-haiku-4-5':  { in: 1, out: 5 },
 };
+const CACHE_READ_MULT = 0.1;
+const CACHE_WRITE_MULT = 1.25; // ephemeral (5-minute) cache write premium
 
 function formatTimestamp(ts) {
   // e.g. "Jun 13, 2026, 4:13 AM" — date and time, locale-formatted.
@@ -283,14 +287,24 @@ function formatTimestamp(ts) {
 function estimateCostUsd(model, usage) {
   const p = MODEL_PRICING[model];
   if (!p || !usage) return null;
-  return (usage.input_tokens * p.in + usage.output_tokens * p.out) / 1e6;
+  const cacheRead = usage.cache_read_input_tokens || 0;
+  const cacheWrite = usage.cache_creation_input_tokens || 0;
+  return (usage.input_tokens * p.in
+        + cacheRead * p.in * CACHE_READ_MULT
+        + cacheWrite * p.in * CACHE_WRITE_MULT
+        + usage.output_tokens * p.out) / 1e6;
 }
 
-// Bottom-of-message stats line: time taken · tokens · estimated USD cost.
-function formatStats({ model, durationMs, usage } = {}) {
+// Bottom-of-message stats line: turns · time · tokens (cache reads shown
+// separately) · estimated USD cost.
+function formatStats({ model, durationMs, usage, turns } = {}) {
   const parts = [];
+  if (turns != null) parts.push(`${turns} turn${turns === 1 ? '' : 's'}`);
   if (durationMs != null) parts.push(`${(durationMs / 1000).toFixed(1)}s`);
-  if (usage) parts.push(`${usage.input_tokens} in / ${usage.output_tokens} out tok`);
+  if (usage) {
+    parts.push(`${usage.input_tokens} in / ${usage.output_tokens} out tok`);
+    if (usage.cache_read_input_tokens) parts.push(`${usage.cache_read_input_tokens} cached`);
+  }
   const cost = estimateCostUsd(model, usage);
   if (cost != null) parts.push(`~$${cost.toFixed(4)}`);
   return parts.join(' · ');
@@ -765,10 +779,15 @@ async function send() {
   const maxTurns = Math.max(1, Number(settings.chatMaxTurns) || 10);
   const startedAt = Date.now();
   const assistantTextParts = [];
-  let totalIn = 0, totalOut = 0;
+  let totalIn = 0, totalOut = 0, totalCacheRead = 0, totalCacheCreate = 0;
+  let turnsUsed = 0;
   let lastMeta = null;
   let lastStop = null;
   let failed = false;
+
+  // Built once so the cached prefix (tools + system) is byte-identical across
+  // every turn of this send — any change would invalidate the prompt cache.
+  const systemPrompt = buildSystemPrompt();
 
   try {
     for (let turn = 0; turn < maxTurns; turn++) {
@@ -781,7 +800,10 @@ async function send() {
       const stream = client.messages.stream({
         model: settings.chatModel,
         max_tokens: Math.max(256, Number(settings.chatMaxTokens) || 4096),
-        system: buildSystemPrompt(),
+        // cache_control on the last system block caches tools + system together
+        // (render order is tools → system → messages), so each follow-up turn in
+        // the tool loop re-reads the static prefix at ~0.1x instead of full price.
+        system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
         messages,
         tools: TOOLS,
       });
@@ -805,14 +827,33 @@ async function send() {
       }
 
       const text = final.content.filter(b => b.type === 'text').map(b => b.text).join('');
+      turnsUsed += 1;
       totalIn += final.usage.input_tokens;
       totalOut += final.usage.output_tokens;
+      totalCacheRead += final.usage.cache_read_input_tokens || 0;
+      totalCacheCreate += final.usage.cache_creation_input_tokens || 0;
       lastMeta = {
         model: settings.chatModel,
         durationMs: Date.now() - startedAt,
-        usage: { input_tokens: totalIn, output_tokens: totalOut },
+        turns: turnsUsed,
+        usage: {
+          input_tokens: totalIn,
+          output_tokens: totalOut,
+          cache_read_input_tokens: totalCacheRead,
+          cache_creation_input_tokens: totalCacheCreate,
+        },
       };
       lastStop = final.stop_reason;
+
+      // Per-turn trace: cache_read > 0 confirms the prefix is being reused.
+      console.log(`[chat] turn ${turnsUsed}/${maxTurns}`, {
+        model: settings.chatModel,
+        input_tokens: final.usage.input_tokens,
+        output_tokens: final.usage.output_tokens,
+        cache_read_input_tokens: final.usage.cache_read_input_tokens || 0,
+        cache_creation_input_tokens: final.usage.cache_creation_input_tokens || 0,
+        stop_reason: final.stop_reason,
+      });
 
       if (text) {
         renderMessageBody(assistantBody, text);
@@ -867,6 +908,27 @@ async function send() {
   if (!failed && assistantTextParts.length) {
     history.push({ role: 'assistant', content: assistantTextParts.join('\n\n'), ts: Date.now(), meta: lastMeta });
   }
+
+  // Per-send summary: turns taken, token totals (uncached in / out, plus cached
+  // reads + writes), and the cache-aware cost estimate.
+  if (turnsUsed > 0) {
+    console.log('[chat] send complete', {
+      model: settings.chatModel,
+      turns: turnsUsed,
+      durationMs: Date.now() - startedAt,
+      input_tokens: totalIn,
+      output_tokens: totalOut,
+      cache_read_input_tokens: totalCacheRead,
+      cache_creation_input_tokens: totalCacheCreate,
+      cost_usd: estimateCostUsd(settings.chatModel, {
+        input_tokens: totalIn,
+        output_tokens: totalOut,
+        cache_read_input_tokens: totalCacheRead,
+        cache_creation_input_tokens: totalCacheCreate,
+      }),
+    });
+  }
+
   persistCurrentSession();
 }
 
