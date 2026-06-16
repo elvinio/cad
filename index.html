@@ -38,6 +38,7 @@
       <div class="vp-left">
         <button id="display-mode-btn" title="Toggle display mode (solid / wireframe / ghost)">Solid</button>
         <button id="quality-toggle-btn" title="Toggle render quality (draft $fn=24 / preview $fn=48)">Preview</button>
+        <button id="measure-btn" title="Measure distance between two points (snaps to vertices/edges)">Measure</button>
       </div>
       <div class="vp-right">
         <button data-view="top" title="Top view">Top</button>
@@ -150,9 +151,10 @@
           Set your Anthropic API key in Chat settings first.</p>
       </div>
       <div id="chat-toolbar">
-        <select id="chat-model" title="Model">
-          <option value="claude-sonnet-4-6">Sonnet 4.6</option>
-          <option value="claude-haiku-4-5">Haiku 4.5</option>
+        <select id="chat-model" title="Model · input/output cost per 1M tokens">
+          <option value="claude-sonnet-4-6">Sonnet 4.6 · $3/$15</option>
+          <option value="claude-opus-4-8">Opus 4.8 · $5/$25</option>
+          <option value="claude-haiku-4-5">Haiku 4.5 · $1/$5</option>
         </select>
         <select id="chat-max-turns" title="Max tool steps before the loop stops on its own">
           <option value="1">1 turn</option>

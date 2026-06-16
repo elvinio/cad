@@ -155,6 +155,7 @@ body {
 .view-presets button:active { background: var(--accent); color: #1a1a2e; }
 #maximize-btn, #grid-toggle-btn { font-size: 16px; padding: 0 6px; }
 #grid-toggle-btn.grid-off { opacity: 0.35; }
+#measure-btn.measuring { background: var(--accent); color: #1a1a2e; }
 
 #viewer-panel.maximized {
   position: fixed;
@@ -325,6 +326,18 @@ body {
 }
 #log .err { color: var(--error); }
 #log .err-link { color: var(--error); text-decoration: underline; cursor: pointer; }
+.log-fix-btn {
+  font: inherit;
+  margin-left: 4px;
+  padding: 1px 8px;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--accent);
+  cursor: pointer;
+  vertical-align: baseline;
+}
+.log-fix-btn:hover { border-color: var(--accent); }
 
 /* ---------- Customizer ---------- */
 #customizer-form { padding: 10px 14px; }

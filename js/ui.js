@@ -3,6 +3,12 @@
 import { subscribe } from './state.js';
 import { jumpToLine, setErrorLines, clearErrorLines } from './editor.js';
 import { applyFullscreenZoom } from './viewer.js';
+import { seedChatInput } from './chat.js';
+
+// Hand a render error to the AI Chat tab as a ready-to-send prompt.
+function askClaudeToFix(errorLine) {
+  seedChatInput(`Fix this OpenSCAD render error:\n\n${errorLine.trim()}`);
+}
 
 export function toast(message, kind = 'info', ms = 3500) {
   const container = document.getElementById('toast-container');
@@ -87,7 +93,7 @@ export function initUI() {
   const overlay = document.getElementById('viewer-overlay');
   const MAX_LOG_LINES = 500;
 
-  const appendLog = (line, isErr) => {
+  const appendLog = (line, isErr, fixable = false) => {
     const span = document.createElement('span');
     if (isErr) {
       const m = line.match(/line (\d+)/);
@@ -101,8 +107,18 @@ export function initUI() {
         span.className = 'err';
       }
     }
-    span.textContent = line + '\n';
+    span.textContent = line;
     log.appendChild(span);
+    if (fixable) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'log-fix-btn';
+      btn.textContent = '✨ Ask Claude to fix';
+      btn.addEventListener('click', () => askClaudeToFix(line));
+      log.appendChild(document.createTextNode(' '));
+      log.appendChild(btn);
+    }
+    log.appendChild(document.createTextNode('\n'));
     while (log.childNodes.length > MAX_LOG_LINES) log.removeChild(log.firstChild);
     log.parentElement.scrollTop = log.parentElement.scrollHeight;
   };
@@ -119,8 +135,9 @@ export function initUI() {
   });
   subscribe('render:log', ({ stream, line }) => {
     const isErr = stream === 'err' && /^ERROR|^WARNING/i.test(line);
-    appendLog(line, isErr);
-    if (stream === 'err' && /^ERROR/i.test(line)) {
+    const isError = stream === 'err' && /^ERROR/i.test(line);
+    appendLog(line, isErr, isError);
+    if (isError) {
       badge.hidden = false;
       const m = line.match(/line (\d+)/);
       if (m) {
@@ -131,11 +148,22 @@ export function initUI() {
   });
   // Overlay text is composed from two sources: the render time (render:done)
   // and the model dimensions (viewer:stats, emitted after the mesh is set).
+  // Overlay text is composed from three sources: render time (render:done),
+  // model dimensions (viewer:stats), and the measurement readout
+  // (measure:updated). When a measurement is active it takes over the overlay
+  // so the distance isn't buried after the dimensions.
   let overlayTime = '';
   let overlayDims = '';
+  let overlayMeasure = '';
   const renderOverlay = () => {
-    overlay.textContent = [overlayTime, overlayDims].filter(Boolean).join(' · ');
+    overlay.textContent = overlayMeasure
+      ? overlayMeasure
+      : [overlayTime, overlayDims].filter(Boolean).join(' · ');
   };
+  subscribe('measure:updated', ({ text }) => {
+    overlayMeasure = text || '';
+    renderOverlay();
+  });
   subscribe('render:done', ({ elapsedMs }) => {
     status.className = 'status-ok';
     badge.hidden = true;
@@ -153,6 +181,6 @@ export function initUI() {
   subscribe('render:error', ({ message }) => {
     status.className = 'status-error';
     badge.hidden = false;
-    appendLog(message, true);
+    appendLog(message, true, true);
   });
 }

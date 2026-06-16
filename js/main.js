@@ -2,7 +2,7 @@
 
 import { subscribe } from './state.js';
 import { initUI, toast } from './ui.js';
-import { initViewer, fitView, setView, cycleDisplayMode, toggleGrid } from './viewer.js';
+import { initViewer, fitView, setView, cycleDisplayMode, toggleGrid, toggleMeasureMode } from './viewer.js';
 import { initEditor, getCode, setCode, clearHistory, canUndo, canRedo, undo, redo, insertText } from './editor.js';
 import { initCustomizer, getParamValues, setParamValues } from './customizer.js';
 import { initParamSets } from './paramsets.js';
@@ -125,6 +125,11 @@ async function boot() {
   $('display-mode-btn').addEventListener('click', (e) => {
     const mode = cycleDisplayMode();
     e.currentTarget.textContent = mode[0].toUpperCase() + mode.slice(1);
+  });
+  const measureBtn = $('measure-btn');
+  measureBtn.addEventListener('click', () => {
+    const on = toggleMeasureMode();
+    measureBtn.classList.toggle('measuring', on);
   });
 
   const qualityBtn = $('quality-toggle-btn');
