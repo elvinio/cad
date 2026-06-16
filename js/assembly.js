@@ -355,13 +355,16 @@ function initTransformPanel() {
   const panel = document.getElementById('part-transform-panel');
   if (!panel) return;
 
-  panel.addEventListener('click', (e) => {
-    const btn = e.target.closest('.txp-btn');
-    if (!btn || !active || !selectedPartId) return;
-    const part = active.parts.find(p => p.id === selectedPartId);
-    if (!part) return;
-    const prop = btn.dataset.prop;
-    const dir = parseFloat(btn.dataset.d);
+  let _holdTimer = null;
+  let _holdCount = 0;
+
+  function _clearHold() {
+    clearTimeout(_holdTimer);
+    _holdTimer = null;
+    _holdCount = 0;
+  }
+
+  function _doStep(part, prop, dir) {
     const step = prop[0] === 'p'
       ? parseFloat(document.getElementById('txp-pos-step').value)
       : parseFloat(document.getElementById('txp-rot-step').value);
@@ -369,7 +372,35 @@ function initTransformPanel() {
     updateTransformPanel(part);
     autosave();
     emit('assembly:parts-changed', { assembly: active });
+  }
+
+  function _scheduleHold(part, prop, dir) {
+    _holdCount++;
+    // Accelerate: 120ms for first 8 repeats, 60ms for next 8, then 30ms
+    const delay = _holdCount <= 8 ? 120 : _holdCount <= 16 ? 60 : 30;
+    _holdTimer = setTimeout(() => {
+      _doStep(part, prop, dir);
+      _scheduleHold(part, prop, dir);
+    }, delay);
+  }
+
+  panel.addEventListener('pointerdown', (e) => {
+    const btn = e.target.closest('.txp-btn');
+    if (!btn || !active || !selectedPartId) return;
+    const part = active.parts.find(p => p.id === selectedPartId);
+    if (!part) return;
+    e.preventDefault();
+    btn.setPointerCapture(e.pointerId);
+    const prop = btn.dataset.prop;
+    const dir = parseFloat(btn.dataset.d);
+    _clearHold();
+    _doStep(part, prop, dir);
+    // 400ms initial delay before repeat begins
+    _holdTimer = setTimeout(() => _scheduleHold(part, prop, dir), 400);
   });
+
+  panel.addEventListener('pointerup', _clearHold);
+  panel.addEventListener('pointercancel', _clearHold);
 
   panel.addEventListener('change', (e) => {
     const inp = e.target.closest('.txp-inp');
