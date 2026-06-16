@@ -131,11 +131,22 @@ export function initUI() {
   });
   // Overlay text is composed from two sources: the render time (render:done)
   // and the model dimensions (viewer:stats, emitted after the mesh is set).
+  // Overlay text is composed from three sources: render time (render:done),
+  // model dimensions (viewer:stats), and the measurement readout
+  // (measure:updated). When a measurement is active it takes over the overlay
+  // so the distance isn't buried after the dimensions.
   let overlayTime = '';
   let overlayDims = '';
+  let overlayMeasure = '';
   const renderOverlay = () => {
-    overlay.textContent = [overlayTime, overlayDims].filter(Boolean).join(' · ');
+    overlay.textContent = overlayMeasure
+      ? overlayMeasure
+      : [overlayTime, overlayDims].filter(Boolean).join(' · ');
   };
+  subscribe('measure:updated', ({ text }) => {
+    overlayMeasure = text || '';
+    renderOverlay();
+  });
   subscribe('render:done', ({ elapsedMs }) => {
     status.className = 'status-ok';
     badge.hidden = true;
