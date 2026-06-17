@@ -30,9 +30,9 @@ js/projects.js     project CRUD dialog + active-project lifecycle
 js/libraries.js    curated lib picker (vendored zips) + custom URL -> IndexedDB
 js/export.js       STL render -> showSaveFilePicker / <a download> / Drive upload
 js/gdrive.js       Google Identity Services token client + Drive REST v3 + sync
-js/settings.js     settings dialog (backend, quality, Client ID, Anthropic key, storage)
+js/settings.js     settings dialog (backend, quality, Client ID, OpenRouter key, storage)
 js/ui.js           tabs, dialogs, toasts, console log panel, status dot
-js/chat.js         AI Chat tab: Anthropic SDK (lazy-imported), streams replies, applies code
+js/chat.js         AI Chat tab: Anthropic SDK (lazy-imported) → OpenRouter; streams, applies code
 sw.js              service worker: cache-first app shell, tolerant wasm precache
 vendor/openscad/   openscad.js + openscad.wasm (see "Provenance" below)
 vendor/three/      three.module.js, three.core.js, OrbitControls.js, STLLoader.js
@@ -101,8 +101,15 @@ curated zips (from openscad-playground's npm dist) have files at the zip root.
   that never run when an `apiKey` is passed) so they're harmless in the browser.
   `js/chat.js` imports the SDK lazily (dynamic import on first send) so the app shell
   still boots offline — the SDK files are NOT in the SW precache; the cache-first fetch
-  handler back-fills them on first use. The SW never intercepts `api.anthropic.com`
-  (cross-origin requests pass through).
+  handler back-fills them on first use. The SW only intercepts same-origin GETs, so
+  `openrouter.ai` (and any provider API) passes through uncached.
+  **Provider**: `getClient()` constructs the SDK with `baseURL:'https://openrouter.ai/api'`
+  so it hits OpenRouter's Anthropic-Messages-compatible endpoint (`/v1/messages`) — the
+  whole tool/image/streaming flow is unchanged, only the transport/model differ. The model
+  is an OpenRouter slug (`settings.chatModel`, default a `:free` model); free models are
+  rate-limited and vary in tool-calling / vision support (the agentic edit tools need tools,
+  the `look` tool needs vision). `cache_control` (ephemeral prompt caching) is dropped since
+  it's Anthropic-provider-specific. The OpenRouter key lives in `settings.openrouterApiKey`.
 
 To upgrade OpenSCAD: pull a newer playground npm release or files.openscad.org snapshot,
 replace `vendor/openscad/*`, re-run the test recipes below.
@@ -141,7 +148,9 @@ Checklist that must keep passing: first-load demo renders; edit → re-render;
 customizer slider re-renders; BOSL2 checkbox install then
 `include <BOSL2/std.scad> cuboid(20, rounding=3);` renders; STL download is valid binary
 STL (length === 84 + 50·triangleCount, header uint32 at offset 80); offline reload after
-SW install still renders; quality switch re-renders.
+SW install still renders; quality switch re-renders. AI Chat: with an OpenRouter key set
+and a tool-capable `:free` model selected, a prompt applies code and re-renders (the live
+call needs network — `openrouter.ai` is blocked in the CC sandbox, so test in a real browser).
 
 ## Gotchas (hard-won — do not rediscover these)
 

@@ -113,7 +113,7 @@ export function initUI() {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'log-fix-btn';
-      btn.textContent = '✨ Ask Claude to fix';
+      btn.textContent = '✨ Ask AI to fix';
       btn.addEventListener('click', () => askClaudeToFix(line));
       log.appendChild(document.createTextNode(' '));
       log.appendChild(btn);
