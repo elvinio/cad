@@ -1,6 +1,8 @@
-// AI chat: talk to Claude about the current model via the Anthropic SDK.
-// The SDK (vendor/anthropic/) is dynamically imported on first send so the
-// app still boots offline; chat itself naturally needs the network.
+// AI chat: talk to an LLM about the current model. Uses the vendored Anthropic
+// SDK pointed at OpenRouter's Anthropic-Messages-compatible endpoint, so the
+// whole tool/streaming/image flow is unchanged but runs on OpenRouter's models
+// (including free ones). The SDK (vendor/anthropic/) is dynamically imported on
+// first send so the app still boots offline; chat itself needs the network.
 
 import { getSettings, saveSettings,
   getChatSessions, saveChatSession, deleteChatSession } from './storage.js';
@@ -252,16 +254,23 @@ function formatBosl2Match(e) {
 }
 
 async function getClient() {
-  const { anthropicApiKey } = getSettings();
-  if (!anthropicApiKey) {
-    throw new Error('No Anthropic API key set — add one in Chat settings.');
+  const { openrouterApiKey } = getSettings();
+  if (!openrouterApiKey) {
+    throw new Error('No OpenRouter API key set — add one in Chat settings.');
   }
   if (!sdkClientPromise) {
     sdkClientPromise = import('../vendor/anthropic/index.mjs')
       .catch(e => { sdkClientPromise = null; throw e; });
   }
   const { default: Anthropic } = await sdkClientPromise;
-  return new Anthropic({ apiKey: anthropicApiKey, dangerouslyAllowBrowser: true });
+  // OpenRouter speaks the Anthropic Messages protocol at /v1/messages, which the
+  // SDK appends to baseURL — so the existing tool/image/stream flow works as-is.
+  return new Anthropic({
+    baseURL: 'https://openrouter.ai/api',
+    apiKey: openrouterApiKey,
+    dangerouslyAllowBrowser: true,
+    defaultHeaders: { 'HTTP-Referer': location.origin, 'X-Title': 'ScadPad' },
+  });
 }
 
 // ---------- message rendering ----------
@@ -308,6 +317,7 @@ function formatStats({ model, durationMs, usage, turns } = {}) {
   }
   const cost = estimateCostUsd(model, usage);
   if (cost != null) parts.push(`~$${cost.toFixed(4)}`);
+  else if (typeof model === 'string' && model.endsWith(':free')) parts.push('free');
   return parts.join(' · ');
 }
 
@@ -801,10 +811,9 @@ async function send() {
       const stream = client.messages.stream({
         model: settings.chatModel,
         max_tokens: Math.max(256, Number(settings.chatMaxTokens) || 4096),
-        // cache_control on the last system block caches tools + system together
-        // (render order is tools → system → messages), so each follow-up turn in
-        // the tool loop re-reads the static prefix at ~0.1x instead of full price.
-        system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
+        // Plain string system prompt: cache_control is Anthropic-provider-specific
+        // and free OpenRouter models don't honour ephemeral prompt caching.
+        system: systemPrompt,
         messages,
         tools: TOOLS,
       });
@@ -872,13 +881,13 @@ async function send() {
 
       if (final.stop_reason === 'max_tokens') {
         addNote('Reply was cut off by the max-token budget. '
-          + 'Raise the limit in Chat settings or ask Claude to be brief.', true);
+          + 'Raise the limit in Chat settings or ask the AI to be brief.', true);
       }
       break; // end_turn: the model is done
     }
 
     if (lastStop === 'tool_use' && !stopRequested) {
-      addNote(`Stopped at the ${maxTurns}-turn limit. Send another message to let Claude continue, `
+      addNote(`Stopped at the ${maxTurns}-turn limit. Send another message to let the AI continue, `
         + 'or raise the limit on the toolbar.');
     }
   } catch (e) {
@@ -943,7 +952,7 @@ function showEmptyHint() {
   const hint = document.createElement('p');
   hint.className = 'hint';
   hint.id = 'chat-empty-hint';
-  hint.textContent = 'Ask Claude to modify the current model.';
+  hint.textContent = 'Ask the AI to modify the current model.';
   container.appendChild(hint);
 }
 
@@ -1141,9 +1150,9 @@ export function initChat() {
   });
 
   // ----- Chat settings dialog -----
-  $('set-anthropic-key').value = settings.anthropicApiKey;
-  $('set-anthropic-key').addEventListener('change', e =>
-    saveSettings({ anthropicApiKey: e.target.value.trim() }));
+  $('set-openrouter-key').value = settings.openrouterApiKey;
+  $('set-openrouter-key').addEventListener('change', e =>
+    saveSettings({ openrouterApiKey: e.target.value.trim() }));
   $('chat-set-max-tokens').value = settings.chatMaxTokens;
   $('chat-set-system').value = getSystemPrompt();
 
