@@ -148,7 +148,9 @@ Checklist that must keep passing: first-load demo renders; edit → re-render;
 customizer slider re-renders; BOSL2 checkbox install then
 `include <BOSL2/std.scad> cuboid(20, rounding=3);` renders; STL download is valid binary
 STL (length === 84 + 50·triangleCount, header uint32 at offset 80); offline reload after
-SW install still renders; quality switch re-renders.
+SW install still renders; quality switch re-renders. AI Chat: with an OpenRouter key set
+and a tool-capable `:free` model selected, a prompt applies code and re-renders (the live
+call needs network — `openrouter.ai` is blocked in the CC sandbox, so test in a real browser).
 
 ## Gotchas (hard-won — do not rediscover these)
 
