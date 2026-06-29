@@ -148,14 +148,11 @@
     <div id="chat-view" class="tab-view">
       <div id="chat-messages">
         <p class="hint" id="chat-empty-hint">Ask the AI to modify the current model.
-          Set your OpenRouter API key in Chat settings first.</p>
+          Set your Modal proxy URL and key in Chat settings first.</p>
       </div>
       <div id="chat-toolbar">
-        <select id="chat-model" title="OpenRouter model — free slugs end in :free (rate-limited, no charge)">
-          <option value="qwen/qwen3-coder:free">Qwen3 Coder · free · tools</option>
-          <option value="deepseek/deepseek-chat-v3-0324:free">DeepSeek V3 · free · tools</option>
-          <option value="meta-llama/llama-3.3-70b-instruct:free">Llama 3.3 70B · free</option>
-          <option value="z-ai/glm-4.5-air:free">GLM 4.5 Air · free · tools</option>
+        <select id="chat-model" title="Model id sent to the Modal endpoint">
+          <option value="google/gemma-4-31B-it">Gemma 4 31B · Modal</option>
         </select>
         <select id="chat-max-turns" title="Max tool steps before the loop stops on its own">
           <option value="1">1 turn</option>
@@ -282,18 +279,22 @@
 <dialog id="chat-settings-dialog">
   <h2>Chat settings</h2>
 
-  <label class="field">OpenRouter API key
-    <input id="set-openrouter-key" type="password" placeholder="sk-or-…"
+  <label class="field">Modal proxy URL
+    <input id="set-modal-url" type="url" placeholder="https://…modal.run"
       autocomplete="off" autocapitalize="off" spellcheck="false">
   </label>
-  <p class="hint">Get a key at openrouter.ai. Stored only in this app's local storage on this
-    device — other sites cannot read it. Requests go directly from your browser to
-    openrouter.ai.</p>
+  <label class="field">Modal API key
+    <input id="set-modal-key" type="password" placeholder="sk-…"
+      autocomplete="off" autocapitalize="off" spellcheck="false">
+  </label>
+  <p class="hint">Point these at your deployed Modal proxy (see <code>modal/gemma_proxy.py</code>):
+    the URL of the proxy and the bearer key it checks. Both are stored only in this app's local
+    storage on this device — other sites cannot read them. Requests go directly from your
+    browser to the proxy.</p>
 
-  <p class="hint">The model and turn limit live on the Chat panel toolbar. Free models (slugs
-    ending in <code>:free</code>) are rate-limited and free of charge. The AI edits the model
-    by calling tools that apply code and render it, then iterates — so pick a model that
-    supports tool calling; the <em>look</em> tool also needs a vision-capable model. The turn
+  <p class="hint">The model and turn limit live on the Chat panel toolbar. The AI edits the
+    model by calling tools that apply code and render it, then iterates — so the endpoint must
+    support tool calling; the <em>look</em> tool also needs a vision-capable model. The turn
     limit caps how many steps it may take.</p>
 
   <label class="field">Max tokens per reply

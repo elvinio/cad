@@ -32,12 +32,13 @@ js/export.js       STL render -> showSaveFilePicker / <a download> / Drive uploa
 js/gdrive.js       Google Identity Services token client + Drive REST v3 + sync
 js/settings.js     settings dialog (backend, quality, Client ID, OpenRouter key, storage)
 js/ui.js           tabs, dialogs, toasts, console log panel, status dot
-js/chat.js         AI Chat tab: Anthropic SDK (lazy-imported) → OpenRouter; streams, applies code
+js/chat.js         AI Chat tab: OpenAI chat-completions (fetch + SSE) → Modal proxy; streams, applies code
 sw.js              service worker: cache-first app shell, tolerant wasm precache
+modal/gemma_proxy.py  Modal CORS+auth proxy in front of the Gemma endpoint (deployed separately)
 vendor/openscad/   openscad.js + openscad.wasm (see "Provenance" below)
 vendor/three/      three.module.js, three.core.js, OrbitControls.js, STLLoader.js
 vendor/fflate/     fflate.module.js (unzip, used in the worker)
-vendor/anthropic/  Anthropic TS SDK .mjs dist (see "Provenance" below)
+vendor/anthropic/  Anthropic TS SDK .mjs dist — UNUSED since the chat moved to the Modal endpoint (kept for reference)
 vendor/libraries/  curated zips: BOSL2, BOSL, MCAD, NopSCADlib, funcutils, fonts
 examples/default.scad  first-run demo project (parametric rounded box)
 ```
@@ -93,23 +94,36 @@ curated zips (from openscad-playground's npm dist) have files at the zip root.
   import map in index.html.
 - `vendor/fflate/fflate.module.js`: npm `fflate@0.8.3` `esm/browser.js`.
 - `vendor/anthropic/`: all `*.mjs` files from npm `@anthropic-ai/sdk` (version recorded in
-  `vendor/anthropic/VERSION`) — the ESM dist uses only relative imports, so it runs
-  unbundled in the browser. **One patch**: `resources/beta/webhooks.mjs` imports the npm
-  package `standardwebhooks` (Node-only signature verification); that import is rewritten
-  to the local `standardwebhooks-stub.mjs`. Re-apply the patch when upgrading the SDK.
-  The remaining `node:` imports in the tree are all *dynamic* (credential-chain paths
-  that never run when an `apiKey` is passed) so they're harmless in the browser.
-  `js/chat.js` imports the SDK lazily (dynamic import on first send) so the app shell
-  still boots offline — the SDK files are NOT in the SW precache; the cache-first fetch
-  handler back-fills them on first use. The SW only intercepts same-origin GETs, so
-  `openrouter.ai` (and any provider API) passes through uncached.
-  **Provider**: `getClient()` constructs the SDK with `baseURL:'https://openrouter.ai/api'`
-  so it hits OpenRouter's Anthropic-Messages-compatible endpoint (`/v1/messages`) — the
-  whole tool/image/streaming flow is unchanged, only the transport/model differ. The model
-  is an OpenRouter slug (`settings.chatModel`, default a `:free` model); free models are
-  rate-limited and vary in tool-calling / vision support (the agentic edit tools need tools,
-  the `look` tool needs vision). `cache_control` (ephemeral prompt caching) is dropped since
-  it's Anthropic-provider-specific. The OpenRouter key lives in `settings.openrouterApiKey`.
+  `vendor/anthropic/VERSION`). **No longer imported** — `js/chat.js` moved from OpenRouter's
+  Anthropic-Messages protocol to the OpenAI chat-completions protocol against a Modal
+  endpoint. The files are kept (not in the SW precache, never fetched) only as a reference
+  if the Anthropic path is ever restored; they can be deleted.
+
+### Chat provider (Modal-hosted Gemma, OpenAI protocol)
+
+`js/chat.js` has no SDK dependency: the transport is a hand-rolled `fetch` to
+`POST {proxyURL}/v1/chat/completions` with `stream:true`, and a small SSE parser
+(`streamChatCompletion`) that accumulates assistant text, tool calls (streamed in
+fragments, keyed by `index`), and the final `usage`. Tools are sent in OpenAI
+function shape (`OPENAI_TOOLS`, mapped from the Anthropic-shaped `TOOLS` whose
+`input_schema` == OpenAI `parameters`). The system prompt is the first `role:'system'`
+message. Tool results go back as `role:'tool'` messages; the `look` tool's image can't
+ride in a `tool` message, so `toolResultToOpenAI()` appends a follow-up `role:'user'`
+message with an `image_url` data-URL part. `finish_reason` drives the loop
+(`tool_calls` → run tools & continue, `stop` → done, `length` → max-tokens warning).
+Cancellation uses an `AbortController` (`stop()` → `controller.abort()`).
+
+**Why the proxy**: the browser can't call the Gemma "auto endpoint" directly — Modal
+proxy-auth rejects the unauthenticated CORS `OPTIONS` preflight, and we don't want the
+`Modal-Key`/`Modal-Secret` in the client. `modal/gemma_proxy.py` is a *public* Modal
+FastAPI app (deployed separately with `modal deploy`) that handles CORS, checks a single
+`Authorization: Bearer` key, and stream-forwards `/v1/*` to the auto endpoint with the
+Modal proxy-auth headers added server-side. The app stores the proxy URL in
+`settings.modalBaseUrl` and the bearer key in `settings.modalApiKey`; the model id
+(`settings.chatModel`, default `google/gemma-4-31B-it`) is sent verbatim in the request.
+The deployment must run vLLM with tool-call parsing and multimodal (vision) weights for
+the agentic edit tools and the `look` tool to work. The SW only intercepts same-origin
+GETs, so the cross-origin proxy API passes through uncached.
 
 To upgrade OpenSCAD: pull a newer playground npm release or files.openscad.org snapshot,
 replace `vendor/openscad/*`, re-run the test recipes below.
@@ -148,9 +162,9 @@ Checklist that must keep passing: first-load demo renders; edit → re-render;
 customizer slider re-renders; BOSL2 checkbox install then
 `include <BOSL2/std.scad> cuboid(20, rounding=3);` renders; STL download is valid binary
 STL (length === 84 + 50·triangleCount, header uint32 at offset 80); offline reload after
-SW install still renders; quality switch re-renders. AI Chat: with an OpenRouter key set
-and a tool-capable `:free` model selected, a prompt applies code and re-renders (the live
-call needs network — `openrouter.ai` is blocked in the CC sandbox, so test in a real browser).
+SW install still renders; quality switch re-renders. AI Chat: with the Modal proxy URL +
+API key set in Chat settings, a prompt applies code and re-renders (the live call needs
+network — the Modal endpoint is blocked in the CC sandbox, so test in a real browser).
 
 ## Gotchas (hard-won — do not rediscover these)
 
