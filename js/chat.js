@@ -281,7 +281,7 @@ function getChatConfig() {
 // assistant text arrives; accumulates any tool calls (streamed in fragments,
 // keyed by index) and the final usage. Returns
 // { text, toolCalls:[{id,name,arguments}], finishReason, usage }.
-async function streamChatCompletion({ config, messages, signal, maxTokens, onText }) {
+async function streamChatCompletion({ config, messages, signal, onText }) {
   const res = await fetch(config.url, {
     method: 'POST',
     headers: config.headers,
@@ -291,7 +291,6 @@ async function streamChatCompletion({ config, messages, signal, maxTokens, onTex
       messages,
       tools: OPENAI_TOOLS,
       tool_choice: 'auto',
-      max_tokens: maxTokens,
       stream: true,
       stream_options: { include_usage: true },
     }),
@@ -858,8 +857,7 @@ async function send() {
     ...history.map(m => ({ role: m.role, content: m.content })),
   ];
 
-  const maxTurns = Math.max(1, Number(settings.chatMaxTurns) || 10);
-  const maxTokens = Math.max(256, Number(settings.chatMaxTokens) || 4096);
+  const maxTurns = Math.max(1, Number(settings.chatMaxTurns) || 100);
   const startedAt = Date.now();
   const assistantTextParts = [];
   let totalIn = 0, totalOut = 0;
@@ -883,7 +881,6 @@ async function send() {
         final = await streamChatCompletion({
           config,
           messages,
-          maxTokens,
           signal: activeController.signal,
           onText: (delta) => {
             accumulated += delta;
@@ -944,10 +941,6 @@ async function send() {
         continue; // let the model inspect the results and decide what's next
       }
 
-      if (final.finishReason === 'length') {
-        addNote('Reply was cut off by the max-token budget. '
-          + 'Raise the limit in Chat settings or ask the AI to be brief.', true);
-      }
       break; // stop: the model is done
     }
 
@@ -1221,11 +1214,8 @@ export function initChat() {
   $('set-modal-key').value = settings.modalApiKey;
   $('set-modal-key').addEventListener('change', e =>
     saveSettings({ modalApiKey: e.target.value.trim() }));
-  $('chat-set-max-tokens').value = settings.chatMaxTokens;
   $('chat-set-system').value = getSystemPrompt();
 
-  $('chat-set-max-tokens').addEventListener('change', e =>
-    saveSettings({ chatMaxTokens: Math.min(16000, Math.max(256, Number(e.target.value) || 4096)) }));
   $('chat-set-system').addEventListener('change', e => {
     const text = e.target.value.trim();
     // Storing null keeps the prompt tracking future default updates.
