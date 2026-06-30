@@ -1,8 +1,10 @@
-// AI chat: talk to an LLM about the current model. Uses the vendored Anthropic
-// SDK pointed at OpenRouter's Anthropic-Messages-compatible endpoint, so the
-// whole tool/streaming/image flow is unchanged but runs on OpenRouter's models
-// (including free ones). The SDK (vendor/anthropic/) is dynamically imported on
-// first send so the app still boots offline; chat itself needs the network.
+// AI chat: talk to an LLM about the current model. Speaks the OpenAI
+// chat-completions protocol (POST /v1/chat/completions, SSE streaming) against a
+// Modal-hosted Gemma endpoint, reached through a small CORS+auth proxy (see
+// modal/gemma_proxy.py). The browser sends a single `Authorization: Bearer` key;
+// the proxy holds the upstream Modal proxy-auth secrets. No SDK is vendored — the
+// transport is a plain fetch + SSE parser, so the app still boots offline (chat
+// itself needs the network).
 
 import { getSettings, saveSettings,
   getChatSessions, saveChatSession, deleteChatSession } from './storage.js';
@@ -152,6 +154,13 @@ const TOOLS = [
   },
 ];
 
+// The same tools in OpenAI function-calling shape (Anthropic input_schema maps
+// 1:1 onto OpenAI parameters). Built once; sent on every request.
+const OPENAI_TOOLS = TOOLS.map(t => ({
+  type: 'function',
+  function: { name: t.name, description: t.description, parameters: t.input_schema },
+}));
+
 // Conversation state. History stores text-only content; rendered images are
 // fetched on demand by the look tool and never persisted, so old images don't
 // accumulate input-token cost.
@@ -166,16 +175,15 @@ let history = [];
 // based edit_code calls until it does. applyCode() and read_code update it.
 let lastCodeSeenByModel = null;
 let busy = false;
-let sdkClientPromise = null;
 // Lazily-fetched BOSL2 signature index (vendor/libraries/bosl2-index.json), used
-// by the lookup_lib tool. Cached after first fetch like sdkClientPromise; the
-// SW back-fills it into the cache on first use so it works offline thereafter.
+// by the lookup_lib tool. Cached after first fetch; the SW back-fills it into the
+// cache on first use so it works offline thereafter.
 let bosl2IndexPromise = null;
 
-// Tool-loop control: stopRequested is set by the Stop button; activeStream is
-// the in-flight SDK stream so Stop can abort the current model reply.
+// Tool-loop control: stopRequested is set by the Stop button; activeController is
+// the in-flight request's AbortController so Stop can abort the current reply.
 let stopRequested = false;
-let activeStream = null;
+let activeController = null;
 
 // Persistence bookkeeping for the active session.
 let currentProjectId = null;
@@ -253,38 +261,94 @@ function formatBosl2Match(e) {
   return `• ${e.name} — ${e.synopsis} [${e.file}]\n${usage}${args}`;
 }
 
-async function getClient() {
-  const { openrouterApiKey } = getSettings();
-  if (!openrouterApiKey) {
-    throw new Error('No OpenRouter API key set — add one in Chat settings.');
-  }
-  if (!sdkClientPromise) {
-    sdkClientPromise = import('../vendor/anthropic/index.mjs')
-      .catch(e => { sdkClientPromise = null; throw e; });
-  }
-  const { default: Anthropic } = await sdkClientPromise;
-  // OpenRouter speaks the Anthropic Messages protocol at /v1/messages, which the
-  // SDK appends to baseURL — so the existing tool/image/stream flow works as-is.
-  return new Anthropic({
-    baseURL: 'https://openrouter.ai/api',
-    apiKey: openrouterApiKey,
-    dangerouslyAllowBrowser: true,
-    defaultHeaders: { 'HTTP-Referer': location.origin, 'X-Title': 'ScadPad' },
+// Build the request config from settings (proxy URL + bearer key + model). The
+// browser talks to the Modal proxy, which forwards to the Gemma auto endpoint.
+function getChatConfig() {
+  const { modalBaseUrl, modalApiKey, chatModel } = getSettings();
+  if (!modalBaseUrl) throw new Error('Set your Modal proxy URL in Chat settings.');
+  if (!modalApiKey) throw new Error('Set your Modal API key in Chat settings.');
+  return {
+    url: modalBaseUrl.replace(/\/+$/, '') + '/v1/chat/completions',
+    model: chatModel,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${modalApiKey}`,
+    },
+  };
+}
+
+// POST one chat-completion and consume the SSE stream. Calls onText(delta) as
+// assistant text arrives; accumulates any tool calls (streamed in fragments,
+// keyed by index) and the final usage. Returns
+// { text, toolCalls:[{id,name,arguments}], finishReason, usage }.
+async function streamChatCompletion({ config, messages, signal, maxTokens, onText }) {
+  const res = await fetch(config.url, {
+    method: 'POST',
+    headers: config.headers,
+    signal,
+    body: JSON.stringify({
+      model: config.model,
+      messages,
+      tools: OPENAI_TOOLS,
+      tool_choice: 'auto',
+      max_tokens: maxTokens,
+      stream: true,
+      stream_options: { include_usage: true },
+    }),
   });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`HTTP ${res.status} ${res.statusText}${body ? ` — ${body.slice(0, 300)}` : ''}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let text = '';
+  let finishReason = null;
+  let usage = null;
+  const toolCalls = []; // index -> { id, name, arguments }
+
+  const handleEvent = (raw) => {
+    // Each SSE event is one or more `data:` lines; collect their payloads.
+    const data = raw.split('\n')
+      .filter(l => l.startsWith('data:'))
+      .map(l => l.slice(5).trim())
+      .join('');
+    if (!data || data === '[DONE]') return;
+    let json;
+    try { json = JSON.parse(data); } catch { return; }
+    if (json.usage) usage = json.usage;
+    const choice = json.choices?.[0];
+    if (!choice) return;
+    const delta = choice.delta || {};
+    if (delta.content) { text += delta.content; onText?.(delta.content); }
+    for (const tc of delta.tool_calls || []) {
+      const i = tc.index ?? 0;
+      const slot = toolCalls[i] || (toolCalls[i] = { id: '', name: '', arguments: '' });
+      if (tc.id) slot.id = tc.id;
+      if (tc.function?.name) slot.name = tc.function.name;
+      if (tc.function?.arguments) slot.arguments += tc.function.arguments;
+    }
+    if (choice.finish_reason) finishReason = choice.finish_reason;
+  };
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sep;
+    while ((sep = buffer.indexOf('\n\n')) !== -1) {
+      handleEvent(buffer.slice(0, sep));
+      buffer = buffer.slice(sep + 2);
+    }
+  }
+  if (buffer.trim()) handleEvent(buffer);
+
+  return { text, toolCalls: toolCalls.filter(Boolean), finishReason, usage };
 }
 
 // ---------- message rendering ----------
-
-// Input/output price per million tokens, used for the per-message cost estimate.
-// Cached input is billed separately: reads ~0.1x, writes (5-min TTL) ~1.25x of
-// the base input rate. usage.input_tokens is the UNCACHED remainder only.
-const MODEL_PRICING = {
-  'claude-opus-4-8':   { in: 5, out: 25 },
-  'claude-sonnet-4-6': { in: 3, out: 15 },
-  'claude-haiku-4-5':  { in: 1, out: 5 },
-};
-const CACHE_READ_MULT = 0.1;
-const CACHE_WRITE_MULT = 1.25; // ephemeral (5-minute) cache write premium
 
 function formatTimestamp(ts) {
   // e.g. "Jun 13, 2026, 4:13 AM" — date and time, locale-formatted.
@@ -294,30 +358,13 @@ function formatTimestamp(ts) {
   });
 }
 
-function estimateCostUsd(model, usage) {
-  const p = MODEL_PRICING[model];
-  if (!p || !usage) return null;
-  const cacheRead = usage.cache_read_input_tokens || 0;
-  const cacheWrite = usage.cache_creation_input_tokens || 0;
-  return (usage.input_tokens * p.in
-        + cacheRead * p.in * CACHE_READ_MULT
-        + cacheWrite * p.in * CACHE_WRITE_MULT
-        + usage.output_tokens * p.out) / 1e6;
-}
-
-// Bottom-of-message stats line: turns · time · tokens (cache reads shown
-// separately) · estimated USD cost.
-function formatStats({ model, durationMs, usage, turns } = {}) {
+// Bottom-of-message stats line: turns · time · tokens. The endpoint is
+// self-hosted, so there's no per-token price to show.
+function formatStats({ durationMs, usage, turns } = {}) {
   const parts = [];
   if (turns != null) parts.push(`${turns} turn${turns === 1 ? '' : 's'}`);
   if (durationMs != null) parts.push(`${(durationMs / 1000).toFixed(1)}s`);
-  if (usage) {
-    parts.push(`${usage.input_tokens} in / ${usage.output_tokens} out tok`);
-    if (usage.cache_read_input_tokens) parts.push(`${usage.cache_read_input_tokens} cached`);
-  }
-  const cost = estimateCostUsd(model, usage);
-  if (cost != null) parts.push(`~$${cost.toFixed(4)}`);
-  else if (typeof model === 'string' && model.endsWith(':free')) parts.push('free');
+  if (usage) parts.push(`${usage.input_tokens} in / ${usage.output_tokens} out tok`);
   return parts.join(' · ');
 }
 
@@ -736,15 +783,35 @@ function isAbortError(e) {
   return e?.name === 'AbortError' || e?.name === 'APIUserAbortError' || /abort/i.test(e?.message || '');
 }
 
+// Convert a runTool() result (Anthropic content blocks) into the OpenAI messages
+// that report it back to the model. Text always goes in the `tool` message; an
+// image (only the look tool returns one) can't live in a `tool` message, so it's
+// appended as a follow-up user message with an image_url part.
+function toolResultToOpenAI(callId, content) {
+  const text = content.filter(b => b.type === 'text').map(b => b.text).join('\n') || '(no output)';
+  const msgs = [{ role: 'tool', tool_call_id: callId, content: text }];
+  const img = content.find(b => b.type === 'image');
+  if (img) {
+    msgs.push({
+      role: 'user',
+      content: [
+        { type: 'text', text: '(rendered image for the look tool result above)' },
+        { type: 'image_url', image_url: { url: `data:${img.source.media_type};base64,${img.source.data}` } },
+      ],
+    });
+  }
+  return msgs;
+}
+
 // ---------- send ----------
 
-// Stop the current reply: abort the in-flight stream and break the loop after
+// Stop the current reply: abort the in-flight request and break the loop after
 // the current step finishes.
 function stop() {
   if (!busy) return;
   stopRequested = true;
   setStatus('Stopping…');
-  activeStream?.abort();
+  activeController?.abort();
 }
 
 async function send() {
@@ -753,9 +820,9 @@ async function send() {
   if (!prompt || busy) return;
 
   const settings = getSettings();
-  let client;
+  let config;
   try {
-    client = await getClient();
+    config = getChatConfig();
   } catch (e) {
     toast(e.message, 'error');
     return;
@@ -783,22 +850,23 @@ async function send() {
 
   addBubble('user', prompt, { ts: userTs });
 
-  // Working message list for the API. History is text-only; tool round-trips
-  // (including look images) for THIS send are appended here, not persisted.
-  const messages = history.map(m => ({ role: m.role, content: m.content }));
+  // Working message list for the API: the system prompt first, then history
+  // (text-only). Tool round-trips (including look images) for THIS send are
+  // appended here, not persisted.
+  const messages = [
+    { role: 'system', content: buildSystemPrompt() },
+    ...history.map(m => ({ role: m.role, content: m.content })),
+  ];
 
   const maxTurns = Math.max(1, Number(settings.chatMaxTurns) || 10);
+  const maxTokens = Math.max(256, Number(settings.chatMaxTokens) || 4096);
   const startedAt = Date.now();
   const assistantTextParts = [];
-  let totalIn = 0, totalOut = 0, totalCacheRead = 0, totalCacheCreate = 0;
+  let totalIn = 0, totalOut = 0;
   let turnsUsed = 0;
   let lastMeta = null;
   let lastStop = null;
   let failed = false;
-
-  // Built once so the cached prefix (tools + system) is byte-identical across
-  // every turn of this send — any change would invalidate the prompt cache.
-  const systemPrompt = buildSystemPrompt();
 
   try {
     for (let turn = 0; turn < maxTurns; turn++) {
@@ -808,52 +876,39 @@ async function send() {
       const assistantBubble = addBubble('assistant', '…');
       const assistantBody = assistantBubble.querySelector('.chat-msg-body');
 
-      const stream = client.messages.stream({
-        model: settings.chatModel,
-        max_tokens: Math.max(256, Number(settings.chatMaxTokens) || 4096),
-        // Plain string system prompt: cache_control is Anthropic-provider-specific
-        // and free OpenRouter models don't honour ephemeral prompt caching.
-        system: systemPrompt,
-        messages,
-        tools: TOOLS,
-      });
-      activeStream = stream;
-
+      activeController = new AbortController();
       let accumulated = '';
-      stream.on('text', (delta) => {
-        accumulated += delta;
-        renderMessageBody(assistantBody, accumulated);
-        $('chat-messages').scrollTop = $('chat-messages').scrollHeight;
-      });
-
       let final;
       try {
-        final = await stream.finalMessage();
+        final = await streamChatCompletion({
+          config,
+          messages,
+          maxTokens,
+          signal: activeController.signal,
+          onText: (delta) => {
+            accumulated += delta;
+            renderMessageBody(assistantBody, accumulated);
+            $('chat-messages').scrollTop = $('chat-messages').scrollHeight;
+          },
+        });
       } catch (e) {
         if (isAbortError(e)) { if (!accumulated) assistantBubble.remove(); break; }
         throw e;
       } finally {
-        activeStream = null;
+        activeController = null;
       }
 
-      const text = final.content.filter(b => b.type === 'text').map(b => b.text).join('');
+      const text = final.text;
       turnsUsed += 1;
-      totalIn += final.usage.input_tokens;
-      totalOut += final.usage.output_tokens;
-      totalCacheRead += final.usage.cache_read_input_tokens || 0;
-      totalCacheCreate += final.usage.cache_creation_input_tokens || 0;
+      totalIn += final.usage?.prompt_tokens || 0;
+      totalOut += final.usage?.completion_tokens || 0;
       lastMeta = {
         model: settings.chatModel,
         durationMs: Date.now() - startedAt,
         turns: turnsUsed,
-        usage: {
-          input_tokens: totalIn,
-          output_tokens: totalOut,
-          cache_read_input_tokens: totalCacheRead,
-          cache_creation_input_tokens: totalCacheCreate,
-        },
+        usage: { input_tokens: totalIn, output_tokens: totalOut },
       };
-      lastStop = final.stop_reason;
+      lastStop = final.finishReason;
 
       if (text) {
         renderMessageBody(assistantBody, text);
@@ -863,30 +918,40 @@ async function send() {
         assistantBubble.remove();
       }
 
-      // Replay the assistant turn verbatim (text + any tool_use blocks) so the
-      // next request continues the same tool exchange.
-      messages.push({ role: 'assistant', content: final.content });
+      // Replay the assistant turn (text + any tool calls) so the next request
+      // continues the same tool exchange.
+      messages.push({
+        role: 'assistant',
+        content: text || null,
+        ...(final.toolCalls.length ? {
+          tool_calls: final.toolCalls.map(tc => ({
+            id: tc.id,
+            type: 'function',
+            function: { name: tc.name, arguments: tc.arguments },
+          })),
+        } : {}),
+      });
 
-      if (final.stop_reason === 'tool_use') {
-        const toolResults = [];
-        for (const block of final.content) {
-          if (block.type !== 'tool_use') continue;
+      if (final.finishReason === 'tool_calls' && final.toolCalls.length) {
+        for (const tc of final.toolCalls) {
+          let input;
+          try { input = JSON.parse(tc.arguments || '{}'); } catch { input = {}; }
+          const block = { name: tc.name, input, id: tc.id };
           displayToolUse(block);
           const content = await runTool(block);
-          toolResults.push({ type: 'tool_result', tool_use_id: block.id, content });
+          messages.push(...toolResultToOpenAI(tc.id, content));
         }
-        messages.push({ role: 'user', content: toolResults });
         continue; // let the model inspect the results and decide what's next
       }
 
-      if (final.stop_reason === 'max_tokens') {
+      if (final.finishReason === 'length') {
         addNote('Reply was cut off by the max-token budget. '
           + 'Raise the limit in Chat settings or ask the AI to be brief.', true);
       }
-      break; // end_turn: the model is done
+      break; // stop: the model is done
     }
 
-    if (lastStop === 'tool_use' && !stopRequested) {
+    if (lastStop === 'tool_calls' && !stopRequested) {
       addNote(`Stopped at the ${maxTurns}-turn limit. Send another message to let the AI continue, `
         + 'or raise the limit on the toolbar.');
     }
@@ -902,7 +967,7 @@ async function send() {
   } finally {
     setStatus(null);
     setBusy(false);
-    activeStream = null;
+    activeController = null;
   }
 
   if (!failed && assistantTextParts.length) {
@@ -1150,9 +1215,12 @@ export function initChat() {
   });
 
   // ----- Chat settings dialog -----
-  $('set-openrouter-key').value = settings.openrouterApiKey;
-  $('set-openrouter-key').addEventListener('change', e =>
-    saveSettings({ openrouterApiKey: e.target.value.trim() }));
+  $('set-modal-url').value = settings.modalBaseUrl;
+  $('set-modal-url').addEventListener('change', e =>
+    saveSettings({ modalBaseUrl: e.target.value.trim() }));
+  $('set-modal-key').value = settings.modalApiKey;
+  $('set-modal-key').addEventListener('change', e =>
+    saveSettings({ modalApiKey: e.target.value.trim() }));
   $('chat-set-max-tokens').value = settings.chatMaxTokens;
   $('chat-set-system').value = getSystemPrompt();
 
