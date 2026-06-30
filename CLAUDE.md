@@ -34,7 +34,7 @@ js/settings.js     settings dialog (backend, quality, Client ID, OpenRouter key,
 js/ui.js           tabs, dialogs, toasts, console log panel, status dot
 js/chat.js         AI Chat tab: OpenAI chat-completions (fetch + SSE) → Modal proxy; streams, applies code
 sw.js              service worker: cache-first app shell, tolerant wasm precache
-modal/gemma_proxy.py  Modal CORS+auth proxy in front of the Gemma endpoint (deployed separately)
+(modal/gemma_proxy.py  Modal CORS+auth proxy — source now in elvinio/health repo, deployed separately)
 vendor/openscad/   openscad.js + openscad.wasm (see "Provenance" below)
 vendor/three/      three.module.js, three.core.js, OrbitControls.js, STLLoader.js
 vendor/fflate/     fflate.module.js (unzip, used in the worker)
@@ -115,10 +115,10 @@ Cancellation uses an `AbortController` (`stop()` → `controller.abort()`).
 
 **Why the proxy**: the browser can't call the Gemma "auto endpoint" directly — Modal
 proxy-auth rejects the unauthenticated CORS `OPTIONS` preflight, and we don't want the
-`Modal-Key`/`Modal-Secret` in the client. `modal/gemma_proxy.py` is a *public* Modal
-FastAPI app (deployed separately with `modal deploy`) that handles CORS, checks a single
-`Authorization: Bearer` key, and stream-forwards `/v1/*` to the auto endpoint with the
-Modal proxy-auth headers added server-side. The app stores the proxy URL in
+`Modal-Key`/`Modal-Secret` in the client. `modal/gemma_proxy.py` (in the `elvinio/health`
+repo) is a *public* Modal FastAPI app (deployed separately with `modal deploy`) that handles
+CORS, checks a single `Authorization: Bearer` key, and stream-forwards `/v1/*` to the auto
+endpoint with the Modal proxy-auth headers added server-side. The app stores the proxy URL in
 `settings.modalBaseUrl` and the bearer key in `settings.modalApiKey`; the model id
 (`settings.chatModel`, default `google/gemma-4-31B-it`) is sent verbatim in the request.
 The deployment must run vLLM with tool-call parsing and multimodal (vision) weights for
