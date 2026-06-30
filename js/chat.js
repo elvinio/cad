@@ -1180,10 +1180,19 @@ export function initChat() {
   $('chat-send-btn').addEventListener('click', () => (busy ? stop() : send()));
   $('chat-clear-btn').addEventListener('click', newChat);
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key !== 'Enter') return;
+    if (e.shiftKey || e.ctrlKey || e.metaKey) {
+      // Shift+Enter / Ctrl+Enter / Cmd+Enter: insert a newline at the caret
+      // instead of the browser's default (which would append at the end).
       e.preventDefault();
-      if (!busy) send();
+      const { selectionStart: s, selectionEnd: en, value } = input;
+      input.value = value.slice(0, s) + '\n' + value.slice(en);
+      input.selectionStart = input.selectionEnd = s + 1;
+      input.dispatchEvent(new Event('input'));
+      return;
     }
+    e.preventDefault();
+    if (!busy) send();
   });
   // Auto-grow the input up to ~5 lines.
   input.addEventListener('input', () => {
