@@ -17,8 +17,7 @@ export const DEFAULT_SETTINGS = {
   modalBaseUrl: '',     // deployed Modal proxy URL (see modal/gemma_proxy.py)
   modalApiKey: '',      // single Bearer key the proxy checks (PROXY_API_KEY)
   chatModel: 'google/gemma-4-31B-it',
-  chatMaxTokens: 4096,
-  chatMaxTurns: 10,     // safety cap on the agentic tool loop
+  chatMaxTurns: 100,    // safety cap on the agentic tool loop
   chatSystemPrompt: null, // null -> DEFAULT_SYSTEM_PROMPT in chat.js
 };
 

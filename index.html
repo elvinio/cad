@@ -159,9 +159,10 @@
           <option value="1">1 turn</option>
           <option value="3">3 turns</option>
           <option value="5">5 turns</option>
-          <option value="10" selected>10 turns</option>
+          <option value="10">10 turns</option>
           <option value="15">15 turns</option>
           <option value="20">20 turns</option>
+          <option value="100" selected>100 turns</option>
         </select>
         <button id="chat-preview-btn" class="icon-btn" title="Preview the current render">&#128269;</button>
         <button id="chat-history-btn" class="icon-btn" title="Chat history for this project">&#128336;</button>
@@ -297,13 +298,6 @@
     model by calling tools that apply code and render it, then iterates — so the endpoint must
     support tool calling; the <em>look</em> tool also needs a vision-capable model. The turn
     limit caps how many steps it may take.</p>
-
-  <label class="field">Max tokens per reply
-    <input id="chat-set-max-tokens" type="number" min="256" max="16000" step="256" value="4096">
-  </label>
-  <p class="hint">Caps each model reply. One request can span several replies (one per
-    apply-and-render step), bounded by the turn limit. A reply that hits this cap is cut
-    off — you'll see a warning in the chat.</p>
 
   <label class="field">System prompt
     <textarea id="chat-set-system" rows="12" spellcheck="false"></textarea>
