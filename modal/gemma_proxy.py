@@ -1,7 +1,7 @@
 """CORS + auth proxy for the ScadPad AI Chat, deployed on Modal.
 
 ScadPad's chat (js/chat.js) is a browser PWA that talks to an OpenAI-compatible
-chat-completions API. It cannot call the Gemma "auto endpoint" directly because:
+chat-completions API. It cannot call the model "auto endpoints" directly because:
 
   1. CORS preflight — the browser sends an unauthenticated OPTIONS request that
      Modal proxy-auth rejects, and the auto endpoint does not return the CORS
@@ -13,8 +13,10 @@ This app is a thin, *public* proxy (no Modal proxy-auth on it) that:
 
   - answers the CORS preflight (OPTIONS) with no auth,
   - checks a single `Authorization: Bearer <PROXY_API_KEY>` on real requests,
-  - stream-forwards every /v1/* request to the upstream auto endpoint, adding the
-    Modal-Key / Modal-Secret headers server-side.
+  - inspects the `model` field in the request body to route to the correct
+    upstream auto endpoint,
+  - stream-forwards the request to the upstream, adding the Modal-Key /
+    Modal-Secret headers server-side.
 
 So the browser only ever holds one bearer key and the proxy URL; the auto
 endpoint's credentials stay here.
@@ -42,12 +44,19 @@ Deploy
    "Modal API key".
 """
 
+import json as _json
 import os
 
 import modal
 
-# The OpenAI-compatible Gemma "auto endpoint" this proxy forwards to.
-UPSTREAM = "https://elvinio--ep-gemma-4-31b-it-server.us-west.modal.direct"
+# Map of model ID (sent by the client) to upstream auto endpoint URL.
+# The proxy inspects the `model` field in the request body and forwards to the
+# matching endpoint. Falls back to DEFAULT_UPSTREAM for unrecognised models.
+UPSTREAMS = {
+    'google/gemma-4-31B-it':  'https://elvinio--ep-gemma-4-31b-it-server.us-west.modal.direct',
+    'Qwen/Qwen3.6-35B-A3B':   'https://elvinio--ep-qwen3-6-35b-a3b-server.ap-south.modal.direct',
+}
+DEFAULT_UPSTREAM = UPSTREAMS['google/gemma-4-31B-it']
 
 app = modal.App("gemma-proxy")
 image = modal.Image.debian_slim().pip_install("fastapi[standard]==0.115.*", "httpx==0.27.*")
@@ -69,9 +78,14 @@ def build_app():
         allow_headers=["*"],
     )
 
-    # One shared client for the lifetime of the container; no timeout so long
-    # streaming generations are not cut off.
-    client = httpx.AsyncClient(base_url=UPSTREAM, timeout=None)
+    # One shared client per upstream, lazily created and reused across requests
+    # within the same container lifetime.
+    clients: dict = {}
+
+    def _get_client(upstream: str) -> httpx.AsyncClient:
+        if upstream not in clients:
+            clients[upstream] = httpx.AsyncClient(base_url=upstream, timeout=None)
+        return clients[upstream]
 
     def _check_auth(request: Request) -> None:
         expected = os.environ["PROXY_API_KEY"]
@@ -87,11 +101,21 @@ def build_app():
 
         _check_auth(request)
 
+        body_bytes = await request.body()
+
+        # Route to the correct upstream based on the `model` field in the body.
+        try:
+            model = _json.loads(body_bytes).get("model", "")
+        except Exception:
+            model = ""
+        upstream = UPSTREAMS.get(model, DEFAULT_UPSTREAM)
+        client = _get_client(upstream)
+
         upstream_req = client.build_request(
             request.method,
             f"/v1/{path}",
             params=request.query_params,
-            content=await request.body(),
+            content=body_bytes,
             headers={
                 "Content-Type": request.headers.get("content-type", "application/json"),
                 "Accept": request.headers.get("accept", "application/json"),
