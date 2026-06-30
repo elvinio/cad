@@ -874,6 +874,14 @@ async function send() {
       const assistantBubble = addBubble('assistant', '…');
       const assistantBody = assistantBubble.querySelector('.chat-msg-body');
 
+      // The self-hosted endpoint can cold-start for up to ~5 minutes if it has
+      // scaled to zero; fetch() has no default timeout, but without this the
+      // "Thinking…" status looks identical whether it's about to fail or just
+      // warming up, which makes people bail (close the tab / hit Stop) early.
+      const coldStartTimer = setTimeout(
+        () => setStatus('Still waking up the model… cold start can take a few minutes'),
+        12000);
+
       activeController = new AbortController();
       let accumulated = '';
       let final;
@@ -883,6 +891,7 @@ async function send() {
           messages,
           signal: activeController.signal,
           onText: (delta) => {
+            if (!accumulated) { clearTimeout(coldStartTimer); setStatus('Thinking…'); }
             accumulated += delta;
             renderMessageBody(assistantBody, accumulated);
             $('chat-messages').scrollTop = $('chat-messages').scrollHeight;
@@ -892,6 +901,7 @@ async function send() {
         if (isAbortError(e)) { if (!accumulated) assistantBubble.remove(); break; }
         throw e;
       } finally {
+        clearTimeout(coldStartTimer);
         activeController = null;
       }
 
@@ -1170,10 +1180,19 @@ export function initChat() {
   $('chat-send-btn').addEventListener('click', () => (busy ? stop() : send()));
   $('chat-clear-btn').addEventListener('click', newChat);
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    if (e.key !== 'Enter') return;
+    if (e.shiftKey || e.ctrlKey || e.metaKey) {
+      // Shift+Enter / Ctrl+Enter / Cmd+Enter: insert a newline at the caret
+      // instead of the browser's default (which would append at the end).
       e.preventDefault();
-      if (!busy) send();
+      const { selectionStart: s, selectionEnd: en, value } = input;
+      input.value = value.slice(0, s) + '\n' + value.slice(en);
+      input.selectionStart = input.selectionEnd = s + 1;
+      input.dispatchEvent(new Event('input'));
+      return;
     }
+    e.preventDefault();
+    if (!busy) send();
   });
   // Auto-grow the input up to ~5 lines.
   input.addEventListener('input', () => {
