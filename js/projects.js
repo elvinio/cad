@@ -5,12 +5,6 @@ import { listProjects, getProject, saveProject, saveProjectRaw, deleteProject,
 import { emit } from './state.js';
 import { toast } from './ui.js';
 
-const DEFAULT_CODE_URL = 'examples/default.scad';
-const FALLBACK_CODE = `// Welcome to ScadPad
-size = 20; // [5:60]
-cube(size, center=true);
-`;
-
 let active = null;
 let dialog, list;
 
@@ -25,12 +19,7 @@ export async function loadInitialProject() {
   let project = settings.activeProjectId && getProject(settings.activeProjectId);
   if (!project) project = listProjects()[0];
   if (!project) {
-    let code = FALLBACK_CODE;
-    try {
-      const res = await fetch(DEFAULT_CODE_URL);
-      if (res.ok) code = await res.text();
-    } catch { /* offline first run without cache: use fallback */ }
-    project = createProject('demo', code);
+    project = createProject('demo', '');
   }
   setActive(project);
   return project;
@@ -62,12 +51,7 @@ export function updateActiveParams(paramValues) {
 async function newProject() {
   const name = prompt('Project name:', `model-${listProjects().length + 1}`);
   if (!name) return;
-  let code = FALLBACK_CODE;
-  try {
-    const res = await fetch(DEFAULT_CODE_URL);
-    if (res.ok) code = await res.text();
-  } catch { /* use fallback */ }
-  const project = createProject(name, code);
+  const project = createProject(name, '');
   setActive(project);
   renderList();
   dialog.close();
