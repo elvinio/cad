@@ -263,12 +263,15 @@ function formatBosl2Match(e) {
 
 // Build the request config from settings (proxy URL + bearer key + model). The
 // browser talks to the Modal proxy, which forwards to the Gemma auto endpoint.
+// The E4B model has its own dedicated endpoint (modalE4bUrl).
 function getChatConfig() {
-  const { modalBaseUrl, modalApiKey, chatModel } = getSettings();
-  if (!modalBaseUrl) throw new Error('Set your Modal proxy URL in Chat settings.');
+  const { modalBaseUrl, modalE4bUrl, modalApiKey, chatModel } = getSettings();
+  const isE4B = chatModel === 'google/gemma-4-E4B-it';
+  const baseUrl = isE4B ? modalE4bUrl : modalBaseUrl;
+  if (!baseUrl) throw new Error(`Set your Modal proxy URL${isE4B ? ' (E4B)' : ''} in Chat settings.`);
   if (!modalApiKey) throw new Error('Set your Modal API key in Chat settings.');
   return {
-    url: modalBaseUrl.replace(/\/+$/, '') + '/v1/chat/completions',
+    url: baseUrl.replace(/\/+$/, '') + '/v1/chat/completions',
     model: chatModel,
     headers: {
       'Content-Type': 'application/json',
@@ -1211,6 +1214,9 @@ export function initChat() {
   $('set-modal-url').value = settings.modalBaseUrl;
   $('set-modal-url').addEventListener('change', e =>
     saveSettings({ modalBaseUrl: e.target.value.trim() }));
+  $('set-modal-e4b-url').value = settings.modalE4bUrl;
+  $('set-modal-e4b-url').addEventListener('change', e =>
+    saveSettings({ modalE4bUrl: e.target.value.trim() }));
   $('set-modal-key').value = settings.modalApiKey;
   $('set-modal-key').addEventListener('change', e =>
     saveSettings({ modalApiKey: e.target.value.trim() }));

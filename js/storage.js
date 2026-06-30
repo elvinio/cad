@@ -15,6 +15,7 @@ export const DEFAULT_SETTINGS = {
   activeProjectId: null,
   driveFolderId: null,
   modalBaseUrl: '',     // deployed Modal proxy URL (see modal/gemma_proxy.py)
+  modalE4bUrl: 'https://elvinio--ep-gemma-4-e4b-it-server.us-west.modal.direct', // E4B-specific endpoint
   modalApiKey: '',      // single Bearer key the proxy checks (PROXY_API_KEY)
   chatModel: 'google/gemma-4-31B-it',
   chatMaxTurns: 100,    // safety cap on the agentic tool loop
