@@ -29,6 +29,14 @@ export function getActiveProject() {
   return active;
 }
 
+// Switch the active project by id (used by the "all chat histories" screen to
+// jump to a project before loading one of its saved conversations).
+export function switchToProject(id) {
+  const project = getProject(id);
+  if (project) setActive(project);
+  return project;
+}
+
 function setActive(project) {
   active = project;
   saveSettings({ activeProjectId: project.id });

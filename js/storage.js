@@ -206,17 +206,40 @@ export function deleteChatSession(projectId, sessionId) {
   write(chatKey(projectId), sessions);
 }
 
+// Project ids (localStorage form: null -> 'none') that have at least one
+// chat key, discovered by scanning localStorage since there's no separate
+// index (sessions are rare enough that a full scan is cheap).
+export function listChatProjectIds() {
+  const ids = [];
+  const prefix = `${PREFIX}.chat.`;
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith(prefix)) ids.push(key.slice(prefix.length));
+  }
+  return ids;
+}
+
+// All saved sessions across every project, grouped by (real) projectId.
+// Used by the "all chat histories" screen.
+export function getAllChatSessions() {
+  return listChatProjectIds()
+    .map(id => ({ projectId: id === 'none' ? null : id, sessions: getChatSessions(id === 'none' ? null : id) }))
+    .filter(g => g.sessions.length);
+}
+
 // ---------- Library zips (IndexedDB) ----------
 
 const DB_NAME = 'scadpad';
 const STORE = 'libzips';
 const STL_STORE = 'stlparts';
+const CHAT_IMG_STORE = 'chatimages';
 
 function openDb() {
   return new Promise((resolve, reject) => {
-    // v2 adds the `stlparts` store. Existing users already have `libzips` at
-    // v1, so the upgrade fires with that store present — guard each create.
-    const req = indexedDB.open(DB_NAME, 2);
+    // v3 adds the `chatimages` store. Existing users already have `libzips`
+    // (v1) and `stlparts` (v2) — the upgrade fires with those present, so
+    // guard each create.
+    const req = indexedDB.open(DB_NAME, 3);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) {
@@ -224,6 +247,9 @@ function openDb() {
       }
       if (!db.objectStoreNames.contains(STL_STORE)) {
         db.createObjectStore(STL_STORE, { keyPath: 'name' });
+      }
+      if (!db.objectStoreNames.contains(CHAT_IMG_STORE)) {
+        db.createObjectStore(CHAT_IMG_STORE, { keyPath: 'id' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -307,6 +333,53 @@ export async function clearStlParts() {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STL_STORE, 'readwrite');
     tx.objectStore(STL_STORE).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// ---------- Chat "look" images (IndexedDB) ----------
+// Multi-view renders shown to the model by the `look` tool. Kept out of
+// localStorage (which chat sessions otherwise share with projects) since
+// base64 image data would blow the ~5MB quota after a handful of turns.
+// Chat history only stores the `id` referencing a record here.
+
+export async function putChatImage(id, mediaType, data) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(CHAT_IMG_STORE, 'readwrite');
+    tx.objectStore(CHAT_IMG_STORE).put({ id, mediaType, data, createdAt: Date.now() });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function getChatImage(id) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(CHAT_IMG_STORE).objectStore(CHAT_IMG_STORE).get(id);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function deleteChatImages(ids) {
+  if (!ids?.length) return;
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(CHAT_IMG_STORE, 'readwrite');
+    const store = tx.objectStore(CHAT_IMG_STORE);
+    for (const id of ids) store.delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function clearChatImages() {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(CHAT_IMG_STORE, 'readwrite');
+    tx.objectStore(CHAT_IMG_STORE).clear();
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });

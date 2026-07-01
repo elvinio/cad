@@ -169,7 +169,8 @@
         <button id="chat-history-btn" class="icon-btn" title="Chat history for this project">&#128336;</button>
       </div>
       <div id="chat-input-row">
-        <button id="chat-clear-btn" class="icon-btn" title="New chat">&#128465;</button>
+        <button id="chat-clear-btn" class="icon-btn" title="New chat (keeps this one in history)">&#128465;</button>
+        <button id="chat-delete-btn" class="icon-btn" title="Clear this chat (deletes it permanently)">&#10060;</button>
         <textarea id="chat-input" rows="1" placeholder="Ask the AI…"
           autocapitalize="sentences" autocomplete="off" autocorrect="on"></textarea>
         <button id="chat-send-btn" title="Send">&#10148;</button>
@@ -186,6 +187,7 @@
     <button id="menu-libraries">&#128218; Libraries…</button>
     <button id="menu-settings">&#9881; Settings…</button>
     <button id="menu-chat-settings">&#128172; Chat settings…</button>
+    <button id="menu-all-chats">&#128209; All chat histories…</button>
     <button id="menu-sync">&#9729; Sync with Google Drive</button>
     <button id="menu-refresh-cache">&#8635; Refresh cache</button>
   </nav>
@@ -339,6 +341,18 @@
   <h2>Chat history</h2>
   <p class="hint">Saved conversations for this project. Open one to keep going where you left off.</p>
   <ul id="chat-history-list"></ul>
+  <form method="dialog"><button class="close-btn">Close</button></form>
+</dialog>
+
+<!-- All chat histories, across every project -->
+<dialog id="all-chats-dialog">
+  <h2>All chat histories</h2>
+  <p class="hint">Every saved conversation, grouped by project. Open one to switch to that project and
+    continue it, or delete to clean up.</p>
+  <ul id="all-chats-list"></ul>
+  <div class="dialog-actions">
+    <button id="all-chats-delete-all">&#128465; Delete all</button>
+  </div>
   <form method="dialog"><button class="close-btn">Close</button></form>
 </dialog>
 
