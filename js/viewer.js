@@ -326,14 +326,16 @@ const VIEW_DIRECTIONS = {
 // Shared framing: point the camera at the model's bounding sphere from dirVec,
 // keeping the model centred and fit. `up` is configurable because looking
 // straight down/up the Z axis (top/bottom) would be gimbal-locked with Z-up.
-function frameFrom(dirVec, up) {
+// `distMult` scales the standoff distance (2.4x the bounding radius by default);
+// smaller values zoom in, larger values zoom out.
+function frameFrom(dirVec, up, distMult = 2.4) {
   if (!mesh) return;
   mesh.geometry.computeBoundingSphere();
   const { center, radius } = mesh.geometry.boundingSphere;
   const r = Math.max(radius, 1);
   controls.target.copy(center);
   camera.up.copy(up);
-  camera.position.copy(center).addScaledVector(dirVec.clone().normalize(), r * 2.4);
+  camera.position.copy(center).addScaledVector(dirVec.clone().normalize(), r * distMult);
   camera.near = r / 100;
   camera.far = r * 100;
   camera.updateProjectionMatrix();
@@ -462,6 +464,90 @@ export function captureMultiView(maxDim = 1024) {
     data: dataUrl.slice(dataUrl.indexOf(',') + 1),
     views: MULTIVIEW_VIEWS.slice(),
   };
+}
+
+// Temporarily override wireframe/opacity on a material for a look_at capture,
+// returning a restore function. Mirrors applyDisplayMode's solid/wireframe/ghost
+// styling but without touching the persistent `displayMode` the UI toggle uses.
+function overrideStyle(material, style) {
+  const prev = {
+    wireframe: material.wireframe, transparent: material.transparent,
+    opacity: material.opacity, depthWrite: material.depthWrite,
+  };
+  material.wireframe = style === 'wireframe';
+  material.transparent = style === 'ghost';
+  material.opacity = style === 'ghost' ? 0.35 : 1;
+  material.depthWrite = style !== 'ghost';
+  material.needsUpdate = true;
+  return () => { Object.assign(material, prev); material.needsUpdate = true; };
+}
+
+const LOOKAT_STYLES = new Set(['solid', 'wireframe', 'ghost']);
+
+// Single free-angle snapshot for the AI chat's look_at tool: yaw/pitch (degrees,
+// OpenSCAD Z-up frame — yaw 0 = FRONT looking along -Y, increasing toward +X;
+// pitch 0 = horizontal, +90 = TOP, -90 = BOTTOM), a zoom multiplier on the
+// default framing distance (<1 = closer, >1 = farther), and an optional
+// display style ('solid'|'wireframe'|'ghost') applied only for this shot.
+// Full resolution (not quartered like captureMultiView), for close-up detail
+// inspection. Restores the user's live camera + material afterward.
+export function captureLookAt({ yawDeg = 45, pitchDeg = 30, zoom = 1, style = 'solid', maxDim = 1024 } = {}) {
+  if (!mesh || !renderer) return null;
+
+  const saved = {
+    pos: camera.position.clone(),
+    up: camera.up.clone(),
+    target: controls.target.clone(),
+    near: camera.near, far: camera.far,
+    gridScale: grid.scale.x,
+    axisScale: axisGroup.scale.x,
+  };
+
+  const restoreStyles = [];
+  const styleName = LOOKAT_STYLES.has(style) ? style : 'solid';
+  if (mesh.material) restoreStyles.push(overrideStyle(mesh.material, styleName));
+  if (assemblyMode && partsGroup) {
+    for (const child of partsGroup.children) {
+      if (child.material) restoreStyles.push(overrideStyle(child.material, styleName));
+    }
+  }
+
+  const yaw = THREE.MathUtils.degToRad(yawDeg);
+  const pitch = THREE.MathUtils.degToRad(THREE.MathUtils.clamp(pitchDeg, -89, 89));
+  const dirVec = new THREE.Vector3(
+    Math.sin(yaw) * Math.cos(pitch),
+    -Math.cos(yaw) * Math.cos(pitch),
+    Math.sin(pitch),
+  );
+  const up = Math.abs(pitchDeg) > 80 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
+  const distMult = 2.4 * THREE.MathUtils.clamp(zoom, 0.15, 5);
+
+  axisGroup.visible = false;
+  frameFrom(dirVec, up, distMult);
+  renderer.render(scene, camera);
+
+  const src = renderer.domElement;
+  const scale = Math.min(1, maxDim / Math.max(src.width, src.height));
+  const out = document.createElement('canvas');
+  out.width = Math.max(1, Math.round(src.width * scale));
+  out.height = Math.max(1, Math.round(src.height * scale));
+  out.getContext('2d').drawImage(src, 0, 0, out.width, out.height);
+  const dataUrl = out.toDataURL('image/jpeg', 0.85);
+
+  for (const restore of restoreStyles) restore();
+  camera.position.copy(saved.pos);
+  camera.up.copy(saved.up);
+  camera.near = saved.near;
+  camera.far = saved.far;
+  camera.updateProjectionMatrix();
+  controls.target.copy(saved.target);
+  grid.scale.setScalar(saved.gridScale);
+  axisGroup.scale.setScalar(saved.axisScale);
+  axisGroup.visible = grid.visible;
+  controls.update();
+  renderer.render(scene, camera);
+
+  return { mediaType: 'image/jpeg', data: dataUrl.slice(dataUrl.indexOf(',') + 1), yawDeg, pitchDeg, zoom, style: styleName };
 }
 
 export function toggleGrid() {

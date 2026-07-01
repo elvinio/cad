@@ -13,7 +13,7 @@ import { getCode, setCode } from './editor.js';
 import { updateActiveCode } from './projects.js';
 import { CURATED } from './libraries.js';
 import { getParamValues, getParamSchema, applyParamOverrides } from './customizer.js';
-import { captureSnapshot, captureMultiView, getMeshStats } from './viewer.js';
+import { captureSnapshot, captureMultiView, captureLookAt, getMeshStats } from './viewer.js';
 import { toast } from './ui.js';
 
 export const DEFAULT_SYSTEM_PROMPT =
@@ -24,7 +24,8 @@ Tools:
 - edit_code: replace an inclusive line range (start_line..end_line) with new_text. Line numbers MUST match the latest read_code; if the code changed since your last read the edit is rejected and you must read_code again.
 - write_code: replace the WHOLE file. Use for new models from scratch or large rewrites.
 - get_params / set_params: read the Customizer parameters and change their values. Parameters are top-level variables that drive the geometry; changing them re-renders the model and is usually better than hard-coding numbers into the code.
-- look: render and return a 2×2 image of the model — ISO (corner), FRONT (-Y), RIGHT (+X), TOP (down -Z) — in OpenSCAD's Z-up frame. edit_code/write_code/set_params only report compile status and the bounding box as text; call look when you want to actually SEE the result. The image is perspective — judge sizes from the reported bounding box, not pixels.
+- look: render and return a 2×2 image of the model — ISO (corner), FRONT (-Y), RIGHT (+X), TOP (down -Z) — in OpenSCAD's Z-up frame. edit_code/write_code/set_params only report compile status and the bounding box as text; call look when you want to actually SEE the result. The image is perspective — judge sizes from the reported bounding box, not pixels. Use this first for a general check.
+- look_at: one free-angle, full-resolution image for close-up inspection — pick any yaw/pitch and zoom in, instead of the four fixed corners of look. Also lets you switch to wireframe (see through to hidden edges/internal cavities) or ghost/translucent (see overlapping solids at once) for the shot. Use it after look when you need to check a specific feature look's quartered view is too small or the wrong angle for — e.g. a chamfer, a hole alignment, wall thickness, or whether two parts actually intersect.
 - lookup_lib: search the installed BOSL2 library for the exact signature of a module or function (e.g. "rounded box", "gear", "screw thread"). Returns names, one-line synopses, usage signatures and argument names. Use it BEFORE calling a library module you're not 100% sure of — do not guess argument names.
 
 Building blocks: you don't have to model everything from raw primitives. The libraries listed in <available_libraries> are pre-made parts you compose like Lego. Prefer them when one fits — especially BOSL2 (include <BOSL2/std.scad>) for rounded/chamfered shapes, attachments, gears, screws and threads. Only include a library that is actually listed in <available_libraries>; if the user wants something that needs a library that isn't installed, say so briefly instead of guessing. For the common cases, plain OpenSCAD primitives + CSG (cube/cylinder/sphere, union/difference/intersection/hull) are still the simplest choice.
@@ -57,9 +58,9 @@ const CORE_BOSL2 =
 Call lookup_lib for exact signatures of anything else.`;
 
 // Tools the model can call. read_code/edit_code/write_code/get_params/set_params
-// all operate on the live editor + customizer; look renders and returns the
-// 2×2 image. Handlers live in runTool(); most return text only (the model uses
-// look to see images), keeping per-turn token cost down.
+// all operate on the live editor + customizer; look/look_at render and return an
+// image. Handlers live in runTool(); most return text only (the model uses
+// look/look_at to see images), keeping per-turn token cost down.
 const TOOLS = [
   {
     name: 'read_code',
@@ -136,6 +137,26 @@ const TOOLS = [
       'Render the current model and return a 2×2 image (ISO, FRONT, RIGHT, TOP views in OpenSCAD '
       + 'Z-up) plus the bounding-box dimensions. Call this whenever you want to see the result.',
     input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'look_at',
+    description:
+      'Render one free-angle, full-resolution image of the model for close-up inspection — use it '
+      + 'to zoom into a specific feature or view an angle the fixed 2×2 look grid does not cover. '
+      + 'yaw_deg/pitch_deg pick the camera direction (Z-up: yaw 0 = FRONT looking along -Y, increasing '
+      + 'toward +X/RIGHT at 90; pitch 0 = horizontal, +90 = TOP, -90 = BOTTOM). zoom scales the default '
+      + 'framing distance (0.15-5; below 1 moves the camera closer, above 1 farther). style switches the '
+      + 'material for this shot only: "solid" (default), "wireframe" (see through to hidden edges), or '
+      + '"ghost" (translucent, to see overlapping/internal solids). Returns the bounding-box dimensions as text.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        yaw_deg: { type: 'number', description: 'Camera azimuth in degrees. 0=FRONT, 90=RIGHT, 180=BACK, 270/-90=LEFT. Default 45 (a corner view).' },
+        pitch_deg: { type: 'number', description: 'Camera elevation in degrees, -89..89. 0=horizontal, 90=TOP, -90=BOTTOM. Default 30.' },
+        zoom: { type: 'number', description: 'Framing distance multiplier, 0.15-5. Below 1 zooms in closer; above 1 pulls back. Default 1.' },
+        style: { type: 'string', enum: ['solid', 'wireframe', 'ghost'], description: 'Material style for this shot only. Default "solid".' },
+      },
+    },
   },
   {
     name: 'lookup_lib',
@@ -578,6 +599,15 @@ function displayToolUse({ name, input }) {
     case 'look':
       addToolUseRow('look', '');
       break;
+    case 'look_at': {
+      const parts = [];
+      if (input?.yaw_deg != null) parts.push(`yaw ${input.yaw_deg}°`);
+      if (input?.pitch_deg != null) parts.push(`pitch ${input.pitch_deg}°`);
+      if (input?.zoom != null) parts.push(`zoom ${input.zoom}×`);
+      if (input?.style && input.style !== 'solid') parts.push(input.style);
+      addToolUseRow('look_at', parts.join(', '));
+      break;
+    }
     case 'lookup_lib':
       addToolUseRow('lookup_lib', input?.query ? `"${input.query}"` : '');
       break;
@@ -743,6 +773,24 @@ function runLook() {
   ];
 }
 
+function runLookAt(input) {
+  const yawDeg = Number.isFinite(input?.yaw_deg) ? input.yaw_deg : 45;
+  const pitchDeg = Number.isFinite(input?.pitch_deg) ? input.pitch_deg : 30;
+  const zoom = Number.isFinite(input?.zoom) ? input.zoom : 1;
+  const style = typeof input?.style === 'string' ? input.style : 'solid';
+  const img = captureLookAt({ yawDeg, pitchDeg, zoom, style });
+  if (!img) {
+    return [{ type: 'text', text: 'Nothing is rendered yet — apply or fix the code first, then look_at again.' }];
+  }
+  const dims = dimsLine();
+  addImageButton(`View render — yaw ${img.yawDeg}°, pitch ${img.pitchDeg}°, zoom ${img.zoom}×${img.style !== 'solid' ? `, ${img.style}` : ''}`,
+    `data:${img.mediaType};base64,${img.data}`, `Bounding box: ${dims}`);
+  return [
+    { type: 'text', text: `Bounding box ${dims}. Single view at yaw ${img.yawDeg}°, pitch ${img.pitchDeg}°, zoom ${img.zoom}×, style ${img.style} (OpenSCAD Z-up).` },
+    { type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } },
+  ];
+}
+
 async function runLookupLib(input) {
   const query = (input?.query || '').trim();
   if (!query) return [{ type: 'text', text: 'lookup_lib needs a `query`, e.g. "rounded box" or "spur gear".' }];
@@ -773,6 +821,7 @@ async function runTool(block) {
     case 'get_params': return runGetParams();
     case 'set_params': return await runSetParams(block.input || {});
     case 'look':       return runLook();
+    case 'look_at':    return runLookAt(block.input || {});
     case 'lookup_lib': return await runLookupLib(block.input || {});
     default:           return [{ type: 'text', text: `Unknown tool: ${block.name}` }];
   }
@@ -784,7 +833,7 @@ function isAbortError(e) {
 
 // Convert a runTool() result (Anthropic content blocks) into the OpenAI messages
 // that report it back to the model. Text always goes in the `tool` message; an
-// image (only the look tool returns one) can't live in a `tool` message, so it's
+// image (only look/look_at return one) can't live in a `tool` message, so it's
 // appended as a follow-up user message with an image_url part.
 function toolResultToOpenAI(callId, content) {
   const text = content.filter(b => b.type === 'text').map(b => b.text).join('\n') || '(no output)';
