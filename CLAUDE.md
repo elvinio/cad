@@ -40,7 +40,6 @@ vendor/three/      three.module.js, three.core.js, OrbitControls.js, STLLoader.j
 vendor/fflate/     fflate.module.js (unzip, used in the worker)
 vendor/anthropic/  Anthropic TS SDK .mjs dist — UNUSED since the chat moved to the Modal endpoint (kept for reference)
 vendor/libraries/  curated zips: BOSL2, BOSL, MCAD, NopSCADlib, funcutils, fonts
-examples/default.scad  first-run demo project (parametric rounded box)
 ```
 
 ### Event bus topics (js/state.js)
@@ -158,7 +157,8 @@ inst.callMain(['/input.scad','-o','/out.off','--export-format=off','--backend=ma
 inst.FS.readFile('/out.off');
 ```
 
-Checklist that must keep passing: first-load demo renders; edit → re-render;
+Checklist that must keep passing: first-load starts with empty code (no render until
+the user types something); edit → re-render;
 customizer slider re-renders; BOSL2 checkbox install then
 `include <BOSL2/std.scad> cuboid(20, rounding=3);` renders; STL download is valid binary
 STL (length === 84 + 50·triangleCount, header uint32 at offset 80); offline reload after
