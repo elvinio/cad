@@ -6,11 +6,12 @@
 // transport is a plain fetch + SSE parser, so the app still boots offline (chat
 // itself needs the network).
 
-import { getSettings, saveSettings,
-  getChatSessions, saveChatSession, deleteChatSession } from './storage.js';
+import { getSettings, saveSettings, getProject,
+  getChatSessions, saveChatSession, deleteChatSession, getAllChatSessions,
+  putChatImage, getChatImage, deleteChatImages } from './storage.js';
 import { emit, subscribe } from './state.js';
 import { getCode, setCode } from './editor.js';
-import { updateActiveCode } from './projects.js';
+import { updateActiveCode, switchToProject } from './projects.js';
 import { CURATED } from './libraries.js';
 import { getParamValues, getParamSchema, applyParamOverrides } from './customizer.js';
 import { captureSnapshot, captureMultiView, captureLookAt, getMeshStats } from './viewer.js';
@@ -546,6 +547,38 @@ function openImageModal(dataUrl, caption) {
   $('chat-preview-dialog').showModal();
 }
 
+// Same button as addImageButton, but for history replay: the image bytes
+// live in IndexedDB (by id), not in memory, so fetch them lazily on click.
+function addImageButtonLazy(label, imageId, caption) {
+  const container = $('chat-messages');
+  const row = document.createElement('div');
+  row.className = 'chat-tool-row';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'chat-code-btn';
+  btn.textContent = `\u{1F5BC} ${label}`;
+  btn.addEventListener('click', async () => {
+    const rec = await getChatImage(imageId);
+    if (!rec) { toast('This image is no longer available.', 'error'); return; }
+    openImageModal(`data:${rec.mediaType};base64,${rec.data}`, caption);
+  });
+  row.appendChild(btn);
+  container.appendChild(row);
+  container.scrollTop = container.scrollHeight;
+}
+
+// A tool_result's text, shown as a muted line under its tool-use row. Skipped
+// for `look` (the image button + its caption already covers that result).
+function addToolResultRow(text) {
+  if (!text) return;
+  const container = $('chat-messages');
+  const row = document.createElement('div');
+  row.className = 'chat-tool-row chat-tool-result';
+  row.textContent = text;
+  container.appendChild(row);
+  container.scrollTop = container.scrollHeight;
+}
+
 // ---------- tool-use display ----------
 
 // Show a row in the transcript for a tool the model just called, with its key
@@ -576,43 +609,36 @@ function formatParamMap(params) {
   return Object.entries(params).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ');
 }
 
-// Render the chat row describing one tool_use block (called before running it).
-function displayToolUse({ name, input }) {
+// Summarize one tool_use block the same way for the live transcript and for
+// history replay, so both render identically.
+function describeToolUse(name, input) {
   switch (name) {
     case 'read_code': {
       const hasRange = input?.start_line != null || input?.end_line != null;
-      addToolUseRow('read_code', hasRange ? `lines ${input.start_line ?? 1}–${input.end_line ?? 'end'}` : 'whole file');
-      break;
+      return { summary: hasRange ? `lines ${input.start_line ?? 1}–${input.end_line ?? 'end'}` : 'whole file', code: null };
     }
     case 'edit_code':
-      addToolUseRow('edit_code', `lines ${input?.start_line}–${input?.end_line}`, { code: input?.new_text ?? '' });
-      break;
+      return { summary: `lines ${input?.start_line}–${input?.end_line}`, code: input?.new_text ?? '' };
     case 'write_code':
-      addToolUseRow('write_code', 'whole file', { code: input?.code ?? '' });
-      break;
+      return { summary: 'whole file', code: input?.code ?? '' };
     case 'set_params':
-      addToolUseRow('set_params', formatParamMap(input?.params));
-      break;
+      return { summary: formatParamMap(input?.params), code: null };
     case 'get_params':
-      addToolUseRow('get_params', '');
-      break;
+      return { summary: '', code: null };
     case 'look':
-      addToolUseRow('look', '');
-      break;
+      return { summary: '', code: null };
     case 'look_at': {
       const parts = [];
       if (input?.yaw_deg != null) parts.push(`yaw ${input.yaw_deg}°`);
       if (input?.pitch_deg != null) parts.push(`pitch ${input.pitch_deg}°`);
       if (input?.zoom != null) parts.push(`zoom ${input.zoom}×`);
       if (input?.style && input.style !== 'solid') parts.push(input.style);
-      addToolUseRow('look_at', parts.join(', '));
-      break;
+      return { summary: parts.join(', '), code: null };
     }
     case 'lookup_lib':
-      addToolUseRow('lookup_lib', input?.query ? `"${input.query}"` : '');
-      break;
+      return { summary: input?.query ? `"${input.query}"` : '', code: null };
     default:
-      addToolUseRow(name, '');
+      return { summary: '', code: null };
   }
 }
 
@@ -765,12 +791,14 @@ function runLook() {
     return [{ type: 'text', text: 'Nothing is rendered yet — apply or fix the code first, then look again.' }];
   }
   const dims = dimsLine();
-  addImageButton('View render — iso · front · right · top',
-    `data:${img.mediaType};base64,${img.data}`, `Bounding box: ${dims}`);
-  return [
+  const label = 'View render — iso · front · right · top';
+  addImageButton(label, `data:${img.mediaType};base64,${img.data}`, `Bounding box: ${dims}`);
+  const content = [
     { type: 'text', text: `Bounding box ${dims}. The image is a 2×2 grid: ISO, FRONT, RIGHT, TOP in OpenSCAD Z-up.` },
     { type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } },
   ];
+  content.imageLabel = label; // read by send() when recording the history step
+  return content;
 }
 
 function runLookAt(input) {
@@ -783,12 +811,14 @@ function runLookAt(input) {
     return [{ type: 'text', text: 'Nothing is rendered yet — apply or fix the code first, then look_at again.' }];
   }
   const dims = dimsLine();
-  addImageButton(`View render — yaw ${img.yawDeg}°, pitch ${img.pitchDeg}°, zoom ${img.zoom}×${img.style !== 'solid' ? `, ${img.style}` : ''}`,
-    `data:${img.mediaType};base64,${img.data}`, `Bounding box: ${dims}`);
-  return [
+  const label = `View render — yaw ${img.yawDeg}°, pitch ${img.pitchDeg}°, zoom ${img.zoom}×${img.style !== 'solid' ? `, ${img.style}` : ''}`;
+  addImageButton(label, `data:${img.mediaType};base64,${img.data}`, `Bounding box: ${dims}`);
+  const content = [
     { type: 'text', text: `Bounding box ${dims}. Single view at yaw ${img.yawDeg}°, pitch ${img.pitchDeg}°, zoom ${img.zoom}×, style ${img.style} (OpenSCAD Z-up).` },
     { type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } },
   ];
+  content.imageLabel = label; // read by send() when recording the history step
+  return content;
 }
 
 async function runLookupLib(input) {
@@ -909,6 +939,7 @@ async function send() {
   const maxTurns = Math.max(1, Number(settings.chatMaxTurns) || 100);
   const startedAt = Date.now();
   const assistantTextParts = [];
+  const steps = []; // full trace (text + tool_use + tool_result) for history replay
   let totalIn = 0, totalOut = 0;
   let turnsUsed = 0;
   let lastMeta = null;
@@ -970,6 +1001,7 @@ async function send() {
         renderMessageBody(assistantBody, text);
         setBubbleStats(assistantBubble, lastMeta);
         assistantTextParts.push(text);
+        steps.push({ type: 'text', text, ts: Date.now(), meta: lastMeta });
       } else {
         assistantBubble.remove();
       }
@@ -993,8 +1025,26 @@ async function send() {
           let input;
           try { input = JSON.parse(tc.arguments || '{}'); } catch { input = {}; }
           const block = { name: tc.name, input, id: tc.id };
-          displayToolUse(block);
+          const { summary, code } = describeToolUse(block.name, block.input);
+          addToolUseRow(block.name, summary, { code });
+          steps.push({ type: 'tool_use', name: block.name, input: block.input, summary, code });
+
           const content = await runTool(block);
+
+          const resultText = content.filter(b => b.type === 'text').map(b => b.text).join('\n') || '(no output)';
+          const imgBlock = content.find(b => b.type === 'image');
+          let imageId = null;
+          if (imgBlock) {
+            imageId = crypto.randomUUID();
+            await putChatImage(imageId, imgBlock.source.media_type, imgBlock.source.data);
+          } else {
+            addToolResultRow(resultText);
+          }
+          steps.push({
+            type: 'tool_result', name: block.name, text: resultText, imageId,
+            imageLabel: imageId ? (content.imageLabel || 'View render') : null,
+          });
+
           messages.push(...toolResultToOpenAI(tc.id, content));
         }
         continue; // let the model inspect the results and decide what's next
@@ -1022,8 +1072,14 @@ async function send() {
     activeController = null;
   }
 
-  if (!failed && assistantTextParts.length) {
-    history.push({ role: 'assistant', content: assistantTextParts.join('\n\n'), ts: Date.now(), meta: lastMeta });
+  if (!failed && (assistantTextParts.length || steps.length)) {
+    history.push({
+      role: 'assistant',
+      content: assistantTextParts.join('\n\n') || '(no reply text — see tool calls)',
+      ts: Date.now(),
+      meta: lastMeta,
+      steps,
+    });
   }
   persistCurrentSession();
 }
@@ -1073,12 +1129,31 @@ function showEmptyHint() {
   container.appendChild(hint);
 }
 
+// Replay one assistant message's full trace (text/tool_use/tool_result), in
+// order, so a reloaded conversation looks the same as it did while streaming.
+function renderAssistantSteps(steps) {
+  for (const step of steps) {
+    if (step.type === 'text') {
+      addBubble('assistant', step.text, { ts: step.ts ?? Date.now(), meta: step.meta ?? null });
+    } else if (step.type === 'tool_use') {
+      addToolUseRow(step.name, step.summary, { code: step.code ?? null });
+    } else if (step.type === 'tool_result') {
+      if (step.imageId) addImageButtonLazy(step.imageLabel || 'View image', step.imageId, step.text);
+      else addToolResultRow(step.text);
+    }
+  }
+}
+
 function renderHistoryToUI() {
   const container = $('chat-messages');
   container.textContent = '';
   if (!history.length) { showEmptyHint(); return; }
   for (const m of history) {
-    addBubble(m.role, displayText(m.content), { ts: m.ts ?? Date.now(), meta: m.meta ?? null });
+    if (m.role === 'assistant' && Array.isArray(m.steps) && m.steps.length) {
+      renderAssistantSteps(m.steps);
+    } else {
+      addBubble(m.role, displayText(m.content), { ts: m.ts ?? Date.now(), meta: m.meta ?? null });
+    }
   }
 }
 
@@ -1106,10 +1181,25 @@ function newChat() {
   showEmptyHint();
 }
 
+// "Clear this chat": permanently delete the currently open conversation (and
+// any images it referenced) instead of archiving it. Distinct from New chat,
+// which keeps the old conversation around in the history list.
+async function clearCurrentChat() {
+  if (!history.length) return;
+  if (!confirm('Delete this conversation? This cannot be undone.')) return;
+  if (currentSessionId) {
+    await deleteSessionWithImages(currentProjectId, { id: currentSessionId, messages: history });
+  } else {
+    await deleteChatImages(collectImageIds(history));
+  }
+  resetSessionState();
+  showEmptyHint();
+}
+
 // Continue a saved conversation (archives the current one first).
 function loadSession(sess) {
   persistCurrentSession();
-  history = sess.messages.map(m => ({ role: m.role, content: m.content, ts: m.ts, meta: m.meta }));
+  history = sess.messages.map(m => ({ role: m.role, content: m.content, ts: m.ts, meta: m.meta, steps: m.steps }));
   lastCodeSeenByModel = sess.lastCodeSeenByModel ?? null;
   currentSessionId = sess.id;
   currentSessionCreated = sess.created;
@@ -1125,7 +1215,7 @@ function onProjectChanged({ project }) {
   const sessions = getChatSessions(currentProjectId);
   if (sessions.length) {
     const s = sessions[0];
-    history = s.messages.map(m => ({ role: m.role, content: m.content, ts: m.ts, meta: m.meta }));
+    history = s.messages.map(m => ({ role: m.role, content: m.content, ts: m.ts, meta: m.meta, steps: m.steps }));
     lastCodeSeenByModel = s.lastCodeSeenByModel ?? null;
     currentSessionId = s.id;
     currentSessionCreated = s.created;
@@ -1134,6 +1224,23 @@ function onProjectChanged({ project }) {
 }
 
 // ---------- history dialog ----------
+
+// Every look-tool image id referenced anywhere in a saved session, so
+// deleting the session can also reclaim its IndexedDB bytes.
+function collectImageIds(messages) {
+  const ids = [];
+  for (const m of messages || []) {
+    for (const step of m.steps || []) {
+      if (step.type === 'tool_result' && step.imageId) ids.push(step.imageId);
+    }
+  }
+  return ids;
+}
+
+async function deleteSessionWithImages(projectId, session) {
+  await deleteChatImages(collectImageIds(session.messages));
+  deleteChatSession(projectId, session.id);
+}
 
 function renderHistoryList() {
   const list = $('chat-history-list');
@@ -1167,9 +1274,9 @@ function renderHistoryList() {
     del.className = 'li-btn';
     del.title = 'Delete';
     del.textContent = '🗑';
-    del.addEventListener('click', () => {
+    del.addEventListener('click', async () => {
       if (!confirm('Delete this saved chat?')) return;
-      deleteChatSession(currentProjectId, s.id);
+      await deleteSessionWithImages(currentProjectId, s);
       if (s.id === currentSessionId) { resetSessionState(); renderHistoryToUI(); }
       renderHistoryList();
     });
@@ -1177,6 +1284,83 @@ function renderHistoryList() {
 
     list.appendChild(li);
   }
+}
+
+// ---------- all-chats dialog (every project) ----------
+
+function projectLabel(projectId) {
+  if (!projectId) return '(no project)';
+  const p = getProject(projectId);
+  return p ? p.name : '(deleted project)';
+}
+
+function renderAllChatsList() {
+  const list = $('all-chats-list');
+  list.textContent = '';
+  const groups = getAllChatSessions().sort((a, b) =>
+    (b.sessions[0]?.updated ?? 0) - (a.sessions[0]?.updated ?? 0));
+  if (!groups.length) {
+    const li = document.createElement('li');
+    li.className = 'chat-history-empty';
+    li.textContent = 'No saved chats yet.';
+    list.appendChild(li);
+    return;
+  }
+  for (const { projectId, sessions } of groups) {
+    const heading = document.createElement('li');
+    heading.className = 'all-chats-group';
+    heading.textContent = projectLabel(projectId);
+    list.appendChild(heading);
+
+    for (const s of sessions) {
+      const li = document.createElement('li');
+
+      const open = document.createElement('button');
+      open.className = 'p-open' + (projectId === currentProjectId && s.id === currentSessionId ? ' current' : '');
+      const title = document.createElement('span');
+      title.textContent = s.title;
+      const meta = document.createElement('span');
+      meta.className = 'meta';
+      meta.textContent = `${new Date(s.updated).toLocaleString()} · ${s.messages.length} msgs`;
+      open.append(title, meta);
+      open.addEventListener('click', () => {
+        if (projectId !== currentProjectId) switchToProject(projectId);
+        loadSession(s);
+        $('all-chats-dialog').close();
+      });
+      li.appendChild(open);
+
+      const del = document.createElement('button');
+      del.className = 'li-btn';
+      del.title = 'Delete';
+      del.textContent = '🗑';
+      del.addEventListener('click', async () => {
+        if (!confirm(`Delete "${s.title}"?`)) return;
+        await deleteSessionWithImages(projectId, s);
+        if (projectId === currentProjectId && s.id === currentSessionId) {
+          resetSessionState();
+          renderHistoryToUI();
+        }
+        renderAllChatsList();
+      });
+      li.appendChild(del);
+
+      list.appendChild(li);
+    }
+  }
+}
+
+async function deleteAllChatHistory() {
+  const groups = getAllChatSessions();
+  const total = groups.reduce((n, g) => n + g.sessions.length, 0);
+  if (!total) return;
+  if (!confirm(`Delete all ${total} saved chat(s) across every project? This cannot be undone.`)) return;
+  for (const { projectId, sessions } of groups) {
+    for (const s of sessions) await deleteSessionWithImages(projectId, s);
+  }
+  resetSessionState();
+  renderHistoryToUI();
+  renderAllChatsList();
 }
 
 // ---------- image preview ----------
@@ -1274,6 +1458,7 @@ export function initChat() {
     renderHistoryList();
     $('chat-history-dialog').showModal();
   });
+  $('chat-delete-btn')?.addEventListener('click', clearCurrentChat);
 
   // ----- Chat settings dialog -----
   $('set-modal-url').value = settings.modalBaseUrl;
@@ -1299,4 +1484,12 @@ export function initChat() {
     $('menu-dialog').close();
     $('chat-settings-dialog').showModal();
   });
+
+  // ----- All chat histories (every project) -----
+  $('menu-all-chats').addEventListener('click', () => {
+    $('menu-dialog').close();
+    renderAllChatsList();
+    $('all-chats-dialog').showModal();
+  });
+  $('all-chats-delete-all').addEventListener('click', deleteAllChatHistory);
 }

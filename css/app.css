@@ -442,14 +442,14 @@ dialog h3 { margin: 18px 0 8px; font-size: 14px; color: var(--muted); }
   margin: 0;
   padding: 0;
 }
-#projects-list li, #libraries-list li, #chat-history-list li, #assemblies-list li {
+#projects-list li, #libraries-list li, #chat-history-list li, #all-chats-list li, #assemblies-list li {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 10px 4px;
   border-bottom: 1px solid var(--border);
 }
-#projects-list .p-open, #chat-history-list .p-open, #assemblies-list .p-open {
+#projects-list .p-open, #chat-history-list .p-open, #all-chats-list .p-open, #assemblies-list .p-open {
   flex: 1;
   min-width: 0;
   background: none;
@@ -460,8 +460,8 @@ dialog h3 { margin: 18px 0 8px; font-size: 14px; color: var(--muted); }
   cursor: pointer;
   padding: 4px 0;
 }
-#projects-list .p-open .meta, #chat-history-list .p-open .meta, #assemblies-list .p-open .meta { display: block; font-size: 11px; color: var(--muted); }
-#projects-list .p-open.current, #chat-history-list .p-open.current, #assemblies-list .p-open.current { color: var(--accent); }
+#projects-list .p-open .meta, #chat-history-list .p-open .meta, #all-chats-list .p-open .meta, #assemblies-list .p-open .meta { display: block; font-size: 11px; color: var(--muted); }
+#projects-list .p-open.current, #chat-history-list .p-open.current, #all-chats-list .p-open.current, #assemblies-list .p-open.current { color: var(--accent); }
 .li-btn {
   background: none;
   border: none;
@@ -691,6 +691,16 @@ dialog h3 { margin: 18px 0 8px; font-size: 14px; color: var(--muted); }
   word-break: break-word;
 }
 
+/* A tool_result's text (e.g. bounding box / compile status), shown as a
+   quieter line right under its tool-use row. */
+.chat-tool-result {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* "Thinking…/Rendering…" status line with animated dots while a reply runs. */
 .chat-status {
   display: flex;
@@ -786,11 +796,20 @@ dialog h3 { margin: 18px 0 8px; font-size: 14px; color: var(--muted); }
 }
 #chat-preview-dims { text-align: center; }
 
-#chat-history-list { list-style: none; margin: 0; padding: 0; }
-#chat-history-list .chat-history-empty {
+#chat-history-list, #all-chats-list { list-style: none; margin: 0; padding: 0; }
+#chat-history-list .chat-history-empty, #all-chats-list .chat-history-empty {
   padding: 10px 4px;
   color: var(--muted);
   font-size: 13px;
+}
+#all-chats-list .all-chats-group {
+  padding: 10px 4px 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  border-bottom: none;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 .field textarea {
   display: block;
