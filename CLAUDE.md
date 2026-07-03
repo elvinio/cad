@@ -20,6 +20,7 @@ index.html         app shell, all panels/dialogs in static markup, import map fo
 css/app.css        all styling; media query for desktop layout
 js/main.js         bootstrap: init modules, wire event-bus subscriptions
 js/state.js        tiny pub/sub bus — ALL cross-module communication goes through it
+js/topics.js       event bus CONTRACT: topic-name constants + JSDoc payload typedefs
 js/storage.js      localStorage (projects, settings) + IndexedDB (library zip bytes)
 js/render-manager.js  debounce, one-in-flight queue, cancel-by-terminate, CGAL fallback
 js/worker/openscad-worker.js  module worker: owns wasm instance, mounts libs, runs CLI
@@ -42,11 +43,22 @@ vendor/anthropic/  Anthropic TS SDK .mjs dist — UNUSED since the chat moved to
 vendor/libraries/  curated zips: BOSL2, BOSL, MCAD, NopSCADlib, funcutils, fonts
 ```
 
-### Event bus topics (js/state.js)
+### Event bus topics (js/topics.js)
 
-`project:changed`, `code:changed`, `params:extracted`, `params:changed`,
-`render:start`, `render:log`, `render:done`, `render:error`, `settings:changed`,
-`libs:changed`. main.js wires which events trigger `requestRender(reason)`.
+`js/topics.js` is the contract: a `TOPICS` constant per topic plus a JSDoc payload
+typedef for each (`project:changed`, `code:changed`, `params:extracted`, `params:changed`,
+`render:start`, `render:log`, `render:done`, `render:highlight`, `render:error`,
+`settings:changed`, `libs:changed`, `viewer:stats`, `assembly:active`,
+`assembly:parts-changed`, `assembly:clearance-changed`, `part:select`, `part:selected`,
+`part:moved`, `fit:updated`, `measure:updated`). `js/state.js` is only the pub/sub
+mechanics; it imports `KNOWN_TOPICS` from `topics.js` and — when
+`localStorage['scadpad.debugEventBus'] === '1'` — `console.warn`s on any `emit()`/
+`subscribe()` call using a topic not listed there, so a typo'd or undocumented topic
+name shows up immediately instead of silently doing nothing. `test/e2e.js` runs the
+whole suite with the flag on and fails if any warning fires — **add new topics to
+`topics.js` first**, or the harness will catch it. main.js wires which events trigger
+`requestRender(reason)`. Payload shapes are documented in `topics.js`'s JSDoc, not
+here — read that file, not scattered inline comments, before adding a listener.
 
 ### Render pipeline (the core)
 
