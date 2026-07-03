@@ -1157,15 +1157,15 @@ function renderHistoryToUI() {
   }
 }
 
-// Write the in-memory conversation back to localStorage (no-op when empty).
-function persistCurrentSession() {
+// Write the in-memory conversation back to IndexedDB (no-op when empty).
+async function persistCurrentSession() {
   if (!history.length) return;
   if (!currentSessionId) currentSessionId = crypto.randomUUID();
   if (!currentSessionCreated) currentSessionCreated = Date.now();
   const firstUser = history.find(m => m.role === 'user');
   const title = (firstUser ? displayText(firstUser.content) : 'Chat')
     .replace(/\s+/g, ' ').trim().slice(0, 60) || 'Chat';
-  saveChatSession(currentProjectId, {
+  await saveChatSession(currentProjectId, {
     id: currentSessionId,
     title,
     messages: history,
@@ -1174,17 +1174,32 @@ function persistCurrentSession() {
   });
 }
 
+// persistCurrentSession/loadSession/onProjectChanged/clearCurrentChat all
+// read-modify-write the same module state (history, currentSessionId,
+// currentProjectId, ...) and now await IndexedDB instead of writing
+// localStorage synchronously. Two of them can be triggered in the same tick
+// — e.g. the "all chats" dialog calls switchToProject() (which emits
+// 'project:changed' -> onProjectChanged) immediately followed by
+// loadSession() — so chain them on one queue to keep each one atomic
+// relative to the others instead of letting their awaits interleave.
+let chatOpChain = Promise.resolve();
+function chainOp(fn) {
+  const run = chatOpChain.then(fn);
+  chatOpChain = run.then(() => {}, () => {});
+  return run;
+}
+
 // "New chat": archive what we have, then start an empty session.
-function newChat() {
-  persistCurrentSession();
+const newChat = () => chainOp(async () => {
+  await persistCurrentSession();
   resetSessionState();
   showEmptyHint();
-}
+});
 
 // "Clear this chat": permanently delete the currently open conversation (and
 // any images it referenced) instead of archiving it. Distinct from New chat,
 // which keeps the old conversation around in the history list.
-async function clearCurrentChat() {
+const clearCurrentChat = () => chainOp(async () => {
   if (!history.length) return;
   if (!confirm('Delete this conversation? This cannot be undone.')) return;
   if (currentSessionId) {
@@ -1194,25 +1209,25 @@ async function clearCurrentChat() {
   }
   resetSessionState();
   showEmptyHint();
-}
+});
 
 // Continue a saved conversation (archives the current one first).
-function loadSession(sess) {
-  persistCurrentSession();
+const loadSession = (sess) => chainOp(async () => {
+  await persistCurrentSession();
   history = sess.messages.map(m => ({ role: m.role, content: m.content, ts: m.ts, meta: m.meta, steps: m.steps }));
   lastCodeSeenByModel = sess.lastCodeSeenByModel ?? null;
   currentSessionId = sess.id;
   currentSessionCreated = sess.created;
   renderHistoryToUI();
-}
+});
 
 // Switching projects: save the old conversation, resume the new project's
 // most recent one (or start empty if it has none).
-function onProjectChanged({ project }) {
-  persistCurrentSession();
+const onProjectChanged = ({ project }) => chainOp(async () => {
+  await persistCurrentSession();
   currentProjectId = project ? project.id : null;
   resetSessionState();
-  const sessions = getChatSessions(currentProjectId);
+  const sessions = await getChatSessions(currentProjectId);
   if (sessions.length) {
     const s = sessions[0];
     history = s.messages.map(m => ({ role: m.role, content: m.content, ts: m.ts, meta: m.meta, steps: m.steps }));
@@ -1221,7 +1236,7 @@ function onProjectChanged({ project }) {
     currentSessionCreated = s.created;
   }
   renderHistoryToUI();
-}
+});
 
 // ---------- history dialog ----------
 
@@ -1239,13 +1254,13 @@ function collectImageIds(messages) {
 
 async function deleteSessionWithImages(projectId, session) {
   await deleteChatImages(collectImageIds(session.messages));
-  deleteChatSession(projectId, session.id);
+  await deleteChatSession(projectId, session.id);
 }
 
-function renderHistoryList() {
+async function renderHistoryList() {
   const list = $('chat-history-list');
   list.textContent = '';
-  const sessions = getChatSessions(currentProjectId);
+  const sessions = await getChatSessions(currentProjectId);
   if (!sessions.length) {
     const li = document.createElement('li');
     li.className = 'chat-history-empty';
@@ -1264,8 +1279,8 @@ function renderHistoryList() {
     meta.className = 'meta';
     meta.textContent = `${new Date(s.updated).toLocaleString()} · ${s.messages.length} msgs`;
     open.append(title, meta);
-    open.addEventListener('click', () => {
-      loadSession(s);
+    open.addEventListener('click', async () => {
+      await loadSession(s);
       $('chat-history-dialog').close();
     });
     li.appendChild(open);
@@ -1278,7 +1293,7 @@ function renderHistoryList() {
       if (!confirm('Delete this saved chat?')) return;
       await deleteSessionWithImages(currentProjectId, s);
       if (s.id === currentSessionId) { resetSessionState(); renderHistoryToUI(); }
-      renderHistoryList();
+      await renderHistoryList();
     });
     li.appendChild(del);
 
@@ -1294,10 +1309,10 @@ function projectLabel(projectId) {
   return p ? p.name : '(deleted project)';
 }
 
-function renderAllChatsList() {
+async function renderAllChatsList() {
   const list = $('all-chats-list');
   list.textContent = '';
-  const groups = getAllChatSessions().sort((a, b) =>
+  const groups = (await getAllChatSessions()).sort((a, b) =>
     (b.sessions[0]?.updated ?? 0) - (a.sessions[0]?.updated ?? 0));
   if (!groups.length) {
     const li = document.createElement('li');
@@ -1323,9 +1338,9 @@ function renderAllChatsList() {
       meta.className = 'meta';
       meta.textContent = `${new Date(s.updated).toLocaleString()} · ${s.messages.length} msgs`;
       open.append(title, meta);
-      open.addEventListener('click', () => {
+      open.addEventListener('click', async () => {
         if (projectId !== currentProjectId) switchToProject(projectId);
-        loadSession(s);
+        await loadSession(s);
         $('all-chats-dialog').close();
       });
       li.appendChild(open);
@@ -1341,7 +1356,7 @@ function renderAllChatsList() {
           resetSessionState();
           renderHistoryToUI();
         }
-        renderAllChatsList();
+        await renderAllChatsList();
       });
       li.appendChild(del);
 
@@ -1351,7 +1366,7 @@ function renderAllChatsList() {
 }
 
 async function deleteAllChatHistory() {
-  const groups = getAllChatSessions();
+  const groups = await getAllChatSessions();
   const total = groups.reduce((n, g) => n + g.sessions.length, 0);
   if (!total) return;
   if (!confirm(`Delete all ${total} saved chat(s) across every project? This cannot be undone.`)) return;
@@ -1360,7 +1375,7 @@ async function deleteAllChatHistory() {
   }
   resetSessionState();
   renderHistoryToUI();
-  renderAllChatsList();
+  await renderAllChatsList();
 }
 
 // ---------- image preview ----------
@@ -1454,8 +1469,8 @@ export function initChat() {
       toast(`Copy failed: ${e.message}`, 'error');
     }
   });
-  $('chat-history-btn').addEventListener('click', () => {
-    renderHistoryList();
+  $('chat-history-btn').addEventListener('click', async () => {
+    await renderHistoryList();
     $('chat-history-dialog').showModal();
   });
   $('chat-delete-btn')?.addEventListener('click', clearCurrentChat);
@@ -1486,9 +1501,9 @@ export function initChat() {
   });
 
   // ----- All chat histories (every project) -----
-  $('menu-all-chats').addEventListener('click', () => {
+  $('menu-all-chats').addEventListener('click', async () => {
     $('menu-dialog').close();
-    renderAllChatsList();
+    await renderAllChatsList();
     $('all-chats-dialog').showModal();
   });
   $('all-chats-delete-all').addEventListener('click', deleteAllChatHistory);
