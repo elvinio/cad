@@ -26,7 +26,6 @@ const SHELL = [
   'js/chat.js',
   'js/paramsets.js',
   'js/assembly.js',
-  'js/util/linediff.js',
   'vendor/three/three.module.js',
   'vendor/three/three.core.js',
   'vendor/three/OrbitControls.js',
