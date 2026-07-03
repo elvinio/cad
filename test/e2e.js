@@ -230,8 +230,16 @@ async function main() {
   const { chromium } = await loadPlaywright();
   const browser = await chromium.launch({ executablePath: CHROMIUM_PATH, args: ['--no-sandbox'] });
   const context = await browser.newContext();
+  // Run with the event-bus debug flag on so any emit()/subscribe() using a
+  // topic missing from js/topics.js (typo, or a new topic nobody registered)
+  // surfaces as a console warning below instead of silently passing.
+  await context.addInitScript(() => localStorage.setItem('scadpad.debugEventBus', '1'));
   const page = await context.newPage();
   page.on('pageerror', (err) => console.error('  [pageerror]', err.message));
+  const busWarnings = [];
+  page.on('console', (msg) => {
+    if (msg.type() === 'warning' && msg.text().startsWith('[event-bus]')) busWarnings.push(msg.text());
+  });
   await page.goto(BASE_URL);
   await page.waitForSelector('#editor');
 
@@ -247,6 +255,16 @@ async function main() {
       console.log(`FAIL  ${name}`);
       console.log(`      ${e.message}`);
     }
+  }
+
+  const busCheckName = 'event bus: no emit()/subscribe() on a topic missing from js/topics.js';
+  if (busWarnings.length) {
+    results.push([busCheckName, false, new Error(busWarnings.join('\n'))]);
+    console.log(`FAIL  ${busCheckName}`);
+    for (const w of busWarnings) console.log(`      ${w}`);
+  } else {
+    results.push([busCheckName, true, null]);
+    console.log(`PASS  ${busCheckName}`);
   }
 
   console.log('\nAI Chat (write/read code, tool loop) is SKIPPED — needs a live Modal endpoint,');
