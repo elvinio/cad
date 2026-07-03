@@ -812,7 +812,7 @@ async function resolvePartGeometry(part) {
     if (source.type === 'scad') {
       const p = getProject(source.projectId);
       if (!p || !p.code) {
-        emit('render:log', `assembly: part "${part.name || part.id}" — project not found, skipping`);
+        emit('render:log', { stream: 'err', line: `WARNING: assembly: part "${part.name || part.id}" — project not found, skipping` });
         return null;
       }
       const off = await renderSource({ source: p.code, overrides: source.overrides || {} });
@@ -821,16 +821,16 @@ async function resolvePartGeometry(part) {
     if (source.type === 'stl') {
       const rec = await getStlPart(source.ref);
       if (!rec || !rec.bytes) {
-        emit('render:log', `assembly: part "${part.name || part.id}" — STL "${source.ref}" not found, skipping`);
+        emit('render:log', { stream: 'err', line: `WARNING: assembly: part "${part.name || part.id}" — STL "${source.ref}" not found, skipping` });
         return null;
       }
       const buf = rec.bytes.buffer ?? rec.bytes;
       return new STLLoader().parse(buf);
     }
-    emit('render:log', `assembly: part "${part.name || part.id}" — unknown source type, skipping`);
+    emit('render:log', { stream: 'err', line: `WARNING: assembly: part "${part.name || part.id}" — unknown source type, skipping` });
     return null;
   } catch (e) {
-    emit('render:log', `assembly: part "${part.name || part.id}" failed to render: ${e.message}`);
+    emit('render:log', { stream: 'err', line: `WARNING: assembly: part "${part.name || part.id}" failed to render: ${e.message}` });
     return null;
   }
 }
@@ -1167,7 +1167,7 @@ function runFit() {
         }
       } catch (e) {
         // Never let a bad pair abort the whole readout.
-        emit('render:log', `fit: pair ${aId}/${bId} failed: ${e.message}`);
+        emit('render:log', { stream: 'err', line: `WARNING: fit: pair ${aId}/${bId} failed: ${e.message}` });
       }
       const entry = { a: aId, b: bId, clash };
       if (!clash && gap != null) entry.gap = gap;
