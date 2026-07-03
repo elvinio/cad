@@ -15,6 +15,21 @@ const FORMAT_EXT = { off: 'off', binstl: 'stl', asciistl: 'stl', param: 'json', 
 // Unzipped {path -> Uint8Array} maps, kept for the worker's lifetime.
 const unzippedLibs = new Map();
 
+// Compiled wasm module, kept for the worker's lifetime so respawned jobs
+// (but not respawned workers) skip recompilation — only re-instantiation.
+let wasmModulePromise = null;
+function getWasmModule() {
+  if (!wasmModulePromise) {
+    const url = new URL('../../vendor/openscad/openscad.wasm', import.meta.url);
+    wasmModulePromise = WebAssembly.compileStreaming(fetch(url)).catch(async () => {
+      // Fallback for servers that don't send application/wasm.
+      const buf = await (await fetch(url)).arrayBuffer();
+      return WebAssembly.compile(buf);
+    });
+  }
+  return wasmModulePromise;
+}
+
 async function getUnzippedLib(name) {
   if (unzippedLibs.has(name)) return unzippedLibs.get(name);
   const rec = await getLibZip(name);
@@ -42,15 +57,17 @@ function mountLib(inst, name, files) {
   const paths = Object.keys(files);
   const strip = stripTopFolder(paths);
   inst.FS.mkdirTree(base);
+  const createdDirs = new Set([base]);
   for (const [path, data] of Object.entries(files)) {
     const rel = path.slice(strip);
     if (!rel) continue;
     const full = `${base}/${rel}`;
     if (path.endsWith('/')) {
-      inst.FS.mkdirTree(full.replace(/\/$/, ''));
+      const dir = full.replace(/\/$/, '');
+      if (!createdDirs.has(dir)) { inst.FS.mkdirTree(dir); createdDirs.add(dir); }
     } else {
       const dir = full.slice(0, full.lastIndexOf('/'));
-      if (dir) inst.FS.mkdirTree(dir);
+      if (dir && !createdDirs.has(dir)) { inst.FS.mkdirTree(dir); createdDirs.add(dir); }
       inst.FS.writeFile(full, data);
     }
   }
@@ -73,8 +90,12 @@ self.onmessage = async (ev) => {
     }
 
     const { default: OpenSCAD } = await import('../../vendor/openscad/openscad.js');
+    const wasmModule = await getWasmModule();
     const inst = await OpenSCAD({
       noInitialRun: true,
+      instantiateWasm: (imports, successCallback) => {
+        WebAssembly.instantiate(wasmModule, imports).then(instance => successCallback(instance, wasmModule));
+      },
       print: line => log('out', line),
       printErr: line => log('err', line),
     });
