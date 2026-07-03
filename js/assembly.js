@@ -21,6 +21,7 @@ import { emit, subscribe } from './state.js';
 import { extractParams } from './render-manager.js';
 import { setParamValues, getParamValues } from './customizer.js';
 import { toast } from './ui.js';
+import { getActiveProject, switchToProject } from './projects.js';
 
 const DEFAULT_PART_COLOR = '#cccccc';
 
@@ -208,8 +209,16 @@ export function renderList() {
 
     li.appendChild(iconBtn('🗑', 'Delete', () => {
       if (!confirm(`Delete assembly "${assembly.name}"?`)) return;
+      const wasActive = active && active.id === assembly.id;
       deleteAssembly(assembly.id);
-      if (active && active.id === assembly.id) active = null;
+      if (wasActive) {
+        active = null;
+        // Deleting the open assembly leaves assembly mode: fall back to the
+        // last scad project, which re-emits project:changed and lets main.js
+        // + viewer.js run their existing exit-assembly-mode teardown.
+        const project = getActiveProject();
+        if (project) switchToProject(project.id);
+      }
       renderList();
     }));
 

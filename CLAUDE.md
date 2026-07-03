@@ -131,18 +131,26 @@ replace `vendor/openscad/*`, re-run the test recipes below.
 
 No test framework; verification is via headless Chromium (Playwright is preinstalled in
 the CC sandbox at `/opt/node22/lib/node_modules/playwright`, browser at
-`/opt/pw-browsers/chromium-*/chrome-linux/chrome`).
+`/opt/pw-browsers/chromium`).
+
+**`test/e2e.js`** is the checked-in harness for the checklist below — it starts its own
+`http.server`, launches headless Chromium, and drives the app through each item, printing
+PASS/FAIL per check. Run it after any change to render pipeline, assembly, library install,
+export, or SW code:
 
 ```sh
-python3 -m http.server 8765   # serve repo root
+node test/e2e.js
 ```
 
-**Browser e2e pattern** (see git history `/tmp/test-e2e.js` shape): load
-`http://localhost:8765/`, wait for
-`#viewer-overlay` text to contain `rendered in` (that's the render-done signal), inject
-code by setting `#editor.value` + dispatching `new Event('input')`, clear
-`#viewer-overlay.textContent` between renders. Console errors of the form
-`listener for render:done failed` indicate viewer/parser bugs.
+Elsewhere (no CC sandbox): `npm i -D playwright && npx playwright install chromium`, then
+`E2E_CHROMIUM=/path/to/chromium node test/e2e.js`. AI Chat is skipped by the harness (needs
+a live Modal endpoint) — test that one manually in a real browser.
+
+**Browser e2e pattern** (what `test/e2e.js` does under the hood, useful when writing a
+one-off repro instead): load the served root, wait for `#viewer-overlay` text to contain
+`rendered in` (that's the render-done signal), inject code by setting `#editor.value` +
+dispatching `new Event('input')`, clear `#viewer-overlay.textContent` between renders.
+Console errors of the form `listener for render:done failed` indicate viewer/parser bugs.
 
 **Direct wasm CLI harness in Node** (much faster for render bugs — bypasses the app):
 
@@ -157,14 +165,16 @@ inst.callMain(['/input.scad','-o','/out.off','--export-format=off','--backend=ma
 inst.FS.readFile('/out.off');
 ```
 
-Checklist that must keep passing: first-load starts with empty code (no render until
+Checklist that must keep passing (automated by `test/e2e.js` — run it, don't just eyeball
+this list): first-load starts with empty code (no render until
 the user types something); edit → re-render;
 customizer slider re-renders; BOSL2 checkbox install then
 `include <BOSL2/std.scad> cuboid(20, rounding=3);` renders; STL download is valid binary
 STL (length === 84 + 50·triangleCount, header uint32 at offset 80); offline reload after
 SW install still renders; quality switch re-renders. AI Chat: with the Modal proxy URL +
 API key set in Chat settings, a prompt applies code and re-renders (the live call needs
-network — the Modal endpoint is blocked in the CC sandbox, so test in a real browser).
+network — the Modal endpoint is blocked in the CC sandbox, so test in a real browser; not
+covered by `test/e2e.js`).
 
 ## Gotchas (hard-won — do not rediscover these)
 
