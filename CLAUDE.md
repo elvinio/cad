@@ -21,7 +21,7 @@ css/app.css        all styling; media query for desktop layout
 js/main.js         bootstrap: init modules, wire event-bus subscriptions
 js/state.js        tiny pub/sub bus — ALL cross-module communication goes through it
 js/topics.js       event bus CONTRACT: topic-name constants + JSDoc payload typedefs
-js/storage.js      localStorage (projects, settings) + IndexedDB (library zip bytes)
+js/storage.js      localStorage (projects, settings) + IndexedDB (library zips, chat sessions)
 js/render-manager.js  debounce, one-in-flight queue, cancel-by-terminate, CGAL fallback
 js/worker/openscad-worker.js  module worker: owns wasm instance, mounts libs, runs CLI
 js/viewer.js       Three.js scene + OrbitControls + hand-written OFF parser
@@ -229,9 +229,14 @@ covered by `test/e2e.js`).
    rate-limited (shared IP). Anonymous `git clone` of arbitrary repos fails (credential
    prompt); npm tarballs via curl are the reliable source for vendored deps.
 
-9. **localStorage ~5MB quota**: projects only (code + param overrides). Zip bytes go to
-   IndexedDB (`scadpad` db, `libzips` store, keyPath `name`). `saveProject()` returns
-   false on QuotaExceededError — callers toast.
+9. **localStorage ~5MB quota**: projects + settings only (code, param overrides, app
+   settings). Everything else lives in IndexedDB (`scadpad` db): library zips
+   (`libzips`, keyPath `name`), imported STL part bytes (`stlparts`, keyPath `name`),
+   chat "look" images (`chatimages`, keyPath `id`), and chat sessions (`chatsessions`,
+   keyPath `id`, indexed by `projectKey`) — the session store is where a long agentic
+   trace's step history lives, since that JSON is the one thing that could otherwise
+   blow the localStorage quota. `saveProject()` returns false on QuotaExceededError —
+   callers toast.
 
 10. **Service worker**: `sw.js` precaches the shell with `cache.addAll` but the ~9.6MB
     `openscad.wasm` is cached with a tolerant separate `Promise.allSettled` so install

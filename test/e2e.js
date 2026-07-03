@@ -213,6 +213,92 @@ async function checkDeleteActiveAssemblyExitsAssemblyMode(page) {
   if (stillAssembly) throw new Error('mode-assembly still set after deleting the active assembly');
 }
 
+// Chat sessions live in IndexedDB (`chatsessions` store), not localStorage —
+// exercise storage.js's API directly (no live Modal endpoint needed) since
+// the AI Chat flow itself is skipped in this sandbox.
+async function checkChatSessionsInIndexedDb(page) {
+  const result = await page.evaluate(async () => {
+    const storage = await import('./js/storage.js');
+    const projectId = 'e2e-chat-project';
+    const otherProjectId = 'e2e-chat-other';
+    // Cap: saving 25 sessions for one project should prune to the most
+    // recent 20 (storage.js MAX_CHAT_SESSIONS).
+    for (let i = 0; i < 25; i++) {
+      await storage.saveChatSession(projectId, {
+        id: `s${i}`, title: `session ${i}`, messages: [{ role: 'user', content: `hi ${i}` }],
+      });
+      await new Promise(r => setTimeout(r, 1)); // distinct `updated` timestamps
+    }
+    await storage.saveChatSession(otherProjectId, { id: 'other-1', title: 'other', messages: [] });
+
+    const sessions = await storage.getChatSessions(projectId);
+    const newestFirst = sessions.every((s, i) => i === 0 || s.updated <= sessions[i - 1].updated);
+    const newestId = sessions[0]?.id;
+
+    await storage.deleteChatSession(projectId, newestId);
+    const afterDelete = await storage.getChatSessions(projectId);
+
+    const groups = await storage.getAllChatSessions();
+    const group = groups.find(g => g.projectId === projectId);
+    const otherGroup = groups.find(g => g.projectId === otherProjectId);
+
+    // Cleanup so this check doesn't leak state into later checks/runs.
+    for (const s of await storage.getChatSessions(projectId)) await storage.deleteChatSession(projectId, s.id);
+    for (const s of await storage.getChatSessions(otherProjectId)) await storage.deleteChatSession(otherProjectId, s.id);
+
+    const legacyKeys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('scadpad.chat.')) legacyKeys.push(k);
+    }
+
+    return {
+      cappedAt20: sessions.length === 20,
+      newestFirst,
+      deletedOneRemains19: afterDelete.length === 19 && !afterDelete.some(s => s.id === newestId),
+      groupFound: !!group && group.sessions.length === 19,
+      otherGroupIsolated: !!otherGroup && otherGroup.sessions.length === 1 && otherGroup.sessions[0].id === 'other-1',
+      noLegacyLocalStorageKeys: legacyKeys.length === 0,
+    };
+  });
+  for (const [key, ok] of Object.entries(result)) {
+    if (!ok) throw new Error(`chat session storage check failed: ${key} — ${JSON.stringify(result)}`);
+  }
+}
+
+// Regression: a v3 -> v4 IndexedDB upgrade must migrate any legacy
+// `scadpad.chat.<projectId>` localStorage arrays into the `chatsessions`
+// store and then remove the localStorage keys, instead of silently
+// dropping saved conversations on first load after the update.
+async function checkChatSessionsMigrateFromLocalStorage(browser) {
+  const context = await browser.newContext();
+  await context.addInitScript(() => {
+    localStorage.setItem('scadpad.chat.migrate-me', JSON.stringify([
+      { id: 'legacy-1', title: 'legacy chat', messages: [{ role: 'user', content: 'hello' }], created: 1, updated: 1 },
+    ]));
+  });
+  const page = await context.newPage();
+  await page.goto(BASE_URL);
+  await page.waitForSelector('#editor');
+  const result = await page.evaluate(async () => {
+    const storage = await import('./js/storage.js');
+    // Give the IDB upgrade transaction a moment to commit (it runs on the
+    // first openDb() call, which happens as soon as the module is used).
+    let sessions = await storage.getChatSessions('migrate-me');
+    for (let i = 0; i < 20 && sessions.length === 0; i++) {
+      await new Promise(r => setTimeout(r, 50));
+      sessions = await storage.getChatSessions('migrate-me');
+    }
+    return {
+      migrated: sessions.length === 1 && sessions[0].id === 'legacy-1',
+      legacyKeyRemoved: localStorage.getItem('scadpad.chat.migrate-me') === null,
+    };
+  });
+  await context.close();
+  if (!result.migrated) throw new Error(`legacy chat session was not migrated into IndexedDB: ${JSON.stringify(result)}`);
+  if (!result.legacyKeyRemoved) throw new Error('legacy localStorage chat key was not removed after migration');
+}
+
 const CHECKS = [
   ['fresh load starts with empty code, no render', checkFreshLoadIsEmpty, { freshContext: true }],
   ['edit triggers a render', checkEditTriggersRender],
@@ -223,6 +309,8 @@ const CHECKS = [
   ['offline reload after SW install still renders', checkOfflineReloadStillRenders],
   ['assembly render:log uses {stream,line} payload (regression)', checkAssemblyRenderLogPayload],
   ['deleting the active assembly exits assembly mode (regression)', checkDeleteActiveAssemblyExitsAssemblyMode],
+  ['chat sessions live in IndexedDB, capped and grouped per project', checkChatSessionsInIndexedDb],
+  ['legacy localStorage chat sessions migrate into IndexedDB (regression)', checkChatSessionsMigrateFromLocalStorage, { freshContext: true }],
 ];
 
 async function main() {

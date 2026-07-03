@@ -182,64 +182,44 @@ export function saveSettings(patch) {
   return settings;
 }
 
-// ---------- Chat sessions (per project) ----------
-// Each project keeps a list of saved conversations (text-only, no snapshots).
-// Capped to the most recent MAX_CHAT_SESSIONS so chat never starves the
-// localStorage quota that projects also share.
-const MAX_CHAT_SESSIONS = 20;
-const chatKey = projectId => `${PREFIX}.chat.${projectId || 'none'}`;
-
-// Newest first.
-export function getChatSessions(projectId) {
-  return read(chatKey(projectId), []);
-}
-
-// Upsert a session by id, restamp `updated`, move it to the front, and prune.
-export function saveChatSession(projectId, session) {
-  const sessions = getChatSessions(projectId).filter(s => s.id !== session.id);
-  sessions.unshift({ ...session, updated: Date.now() });
-  return write(chatKey(projectId), sessions.slice(0, MAX_CHAT_SESSIONS));
-}
-
-export function deleteChatSession(projectId, sessionId) {
-  const sessions = getChatSessions(projectId).filter(s => s.id !== sessionId);
-  write(chatKey(projectId), sessions);
-}
-
-// Project ids (localStorage form: null -> 'none') that have at least one
-// chat key, discovered by scanning localStorage since there's no separate
-// index (sessions are rare enough that a full scan is cheap).
-export function listChatProjectIds() {
-  const ids = [];
-  const prefix = `${PREFIX}.chat.`;
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (key && key.startsWith(prefix)) ids.push(key.slice(prefix.length));
-  }
-  return ids;
-}
-
-// All saved sessions across every project, grouped by (real) projectId.
-// Used by the "all chat histories" screen.
-export function getAllChatSessions() {
-  return listChatProjectIds()
-    .map(id => ({ projectId: id === 'none' ? null : id, sessions: getChatSessions(id === 'none' ? null : id) }))
-    .filter(g => g.sessions.length);
-}
-
 // ---------- Library zips (IndexedDB) ----------
 
 const DB_NAME = 'scadpad';
 const STORE = 'libzips';
 const STL_STORE = 'stlparts';
 const CHAT_IMG_STORE = 'chatimages';
+const CHAT_SESSIONS_STORE = 'chatsessions';
+const LEGACY_CHAT_PREFIX = `${PREFIX}.chat.`;
+
+// One-time migration (v3 -> v4): chat sessions used to live in localStorage
+// under `scadpad.chat.<projectId>` (array of sessions per key). Runs inside
+// the versionchange transaction so it's atomic with the store's creation;
+// the legacy keys are only removed once that transaction actually commits,
+// so a crash mid-migration just re-runs it next boot instead of losing data.
+function migrateChatSessionsFromLocalStorage(store) {
+  const legacyKeys = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith(LEGACY_CHAT_PREFIX)) legacyKeys.push(key);
+  }
+  if (!legacyKeys.length) return;
+  for (const key of legacyKeys) {
+    const projectKey = key.slice(LEGACY_CHAT_PREFIX.length);
+    let sessions;
+    try { sessions = JSON.parse(localStorage.getItem(key)) || []; } catch { sessions = []; }
+    for (const session of sessions) store.put({ ...session, projectKey });
+  }
+  store.transaction.oncomplete = () => {
+    for (const key of legacyKeys) localStorage.removeItem(key);
+  };
+}
 
 function openDb() {
   return new Promise((resolve, reject) => {
-    // v3 adds the `chatimages` store. Existing users already have `libzips`
-    // (v1) and `stlparts` (v2) — the upgrade fires with those present, so
-    // guard each create.
-    const req = indexedDB.open(DB_NAME, 3);
+    // v3 adds the `chatimages` store, v4 adds `chatsessions`. Existing users
+    // already have `libzips` (v1) and `stlparts` (v2) — the upgrade fires
+    // with those present, so guard each create.
+    const req = indexedDB.open(DB_NAME, 4);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) {
@@ -251,10 +231,103 @@ function openDb() {
       if (!db.objectStoreNames.contains(CHAT_IMG_STORE)) {
         db.createObjectStore(CHAT_IMG_STORE, { keyPath: 'id' });
       }
+      if (!db.objectStoreNames.contains(CHAT_SESSIONS_STORE)) {
+        const store = db.createObjectStore(CHAT_SESSIONS_STORE, { keyPath: 'id' });
+        store.createIndex('projectKey', 'projectKey');
+        migrateChatSessionsFromLocalStorage(store);
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
+}
+
+// ---------- Chat sessions (per project, IndexedDB) ----------
+// Each project keeps a list of saved conversations (text-only, no snapshots).
+// The only unbounded-ish JSON here (a long agentic session's step trace can
+// run tens of KB), so — unlike projects/settings — it lives in IndexedDB
+// rather than localStorage. Capped to the most recent MAX_CHAT_SESSIONS per
+// project. Records carry a `projectKey` field (real projectId, or 'none' for
+// the no-project chat) indexed for per-project lookup.
+const MAX_CHAT_SESSIONS = 20;
+const projectKeyOf = projectId => projectId || 'none';
+
+async function chatSessionsStore(mode = 'readonly') {
+  const db = await openDb();
+  return db.transaction(CHAT_SESSIONS_STORE, mode).objectStore(CHAT_SESSIONS_STORE);
+}
+
+async function getAllChatSessionRecords() {
+  const store = await chatSessionsStore();
+  return new Promise((resolve, reject) => {
+    const req = store.getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// Newest first.
+export async function getChatSessions(projectId) {
+  const store = await chatSessionsStore();
+  return new Promise((resolve, reject) => {
+    const req = store.index('projectKey').getAll(projectKeyOf(projectId));
+    req.onsuccess = () => resolve(req.result.sort((a, b) => b.updated - a.updated));
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// Upsert a session by id, restamp `updated`, and prune to MAX_CHAT_SESSIONS
+// (oldest-first) for that project.
+export async function saveChatSession(projectId, session) {
+  const projectKey = projectKeyOf(projectId);
+  const db = await openDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(CHAT_SESSIONS_STORE, 'readwrite');
+    tx.objectStore(CHAT_SESSIONS_STORE).put({ ...session, projectKey, updated: Date.now() });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  const overflow = (await getChatSessions(projectId)).slice(MAX_CHAT_SESSIONS);
+  if (!overflow.length) return true;
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(CHAT_SESSIONS_STORE, 'readwrite');
+    const store = tx.objectStore(CHAT_SESSIONS_STORE);
+    for (const s of overflow) store.delete(s.id);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function deleteChatSession(projectId, sessionId) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(CHAT_SESSIONS_STORE, 'readwrite');
+    tx.objectStore(CHAT_SESSIONS_STORE).delete(sessionId);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// Project ids (IndexedDB form: 'none' -> the no-project chat) that have at
+// least one saved session.
+export async function listChatProjectIds() {
+  const all = await getAllChatSessionRecords();
+  return [...new Set(all.map(s => s.projectKey))];
+}
+
+// All saved sessions across every project, grouped by (real) projectId.
+// Used by the "all chat histories" screen.
+export async function getAllChatSessions() {
+  const all = await getAllChatSessionRecords();
+  const byKey = new Map();
+  for (const s of all) {
+    if (!byKey.has(s.projectKey)) byKey.set(s.projectKey, []);
+    byKey.get(s.projectKey).push(s);
+  }
+  return [...byKey.entries()].map(([key, sessions]) => ({
+    projectId: key === 'none' ? null : key,
+    sessions: sessions.sort((a, b) => b.updated - a.updated),
+  }));
 }
 
 export async function putLibZip(name, url, zipBytes) {
