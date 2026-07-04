@@ -11,14 +11,11 @@ import { getParamValues, getParamSchema, applyParamOverrides } from '../customiz
 import { getMeshStats } from '../viewer.js';
 import { captureMultiView, captureLookAt } from '../viewer/capture.js';
 import { getLastCode, setLastCode } from './session-state.js';
-// addImageButton/setStatus/addNote still live in chat.js (chat/ui.js doesn't
-// exist yet). Tool handlers call straight into UI rendering as a side effect
-// of computing their result — an intentional exception to strict layering
-// (see docs/review-three-angles.md §1.5): simplicity over a bus round-trip
-// for a synchronous same-call-stack UI update. Only referenced inside
-// function bodies below, never at this module's own top level, so this
-// circular import is safe regardless of module evaluation order.
-import { addImageButton, setStatus, addNote } from '../chat.js';
+// Tool handlers call straight into UI rendering as a side effect of computing
+// their result — an intentional exception to strict layering (see
+// docs/review-three-angles.md §1.5): simplicity over a bus round-trip for a
+// synchronous same-call-stack UI update.
+import { addImageButton, setStatus, addNote } from './ui.js';
 
 // Always-on BOSL2 starter kit: the handful of modules that cover most requests,
 // appended to the system prompt only when BOSL2 is installed so even a zero-
