@@ -288,11 +288,14 @@ body {
 .gutter-row {
   min-width: 1.6em;
   padding: 0 2px;
+  cursor: pointer;
+}
+.gutter-row:hover {
+  background: var(--border);
 }
 .gutter-row.err {
   color: var(--error);
   font-weight: 700;
-  cursor: pointer;
   background: rgba(255, 92, 92, 0.15);
 }
 
