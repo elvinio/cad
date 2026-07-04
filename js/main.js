@@ -2,7 +2,8 @@
 
 import { subscribe } from './state.js';
 import { initUI, toast } from './ui.js';
-import { initViewer, fitView, setView, cycleDisplayMode, toggleGrid, toggleMeasureMode } from './viewer.js';
+import { initViewer, fitView, setView, cycleDisplayMode, toggleGrid } from './viewer.js';
+import { toggleMeasureMode } from './viewer/measure.js';
 import { initEditor, getCode, setCode, clearHistory, canUndo, canRedo, undo, redo, insertText } from './editor.js';
 import { initCustomizer, getParamValues, setParamValues } from './customizer.js';
 import { initParamSets } from './paramsets.js';

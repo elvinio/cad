@@ -3,7 +3,7 @@
 import { subscribe } from './state.js';
 import { jumpToLine, setErrorLines, clearErrorLines } from './editor.js';
 import { applyFullscreenZoom } from './viewer.js';
-import { seedChatInput } from './chat.js';
+import { seedChatInput } from './chat/ui.js';
 
 // Hand a render error to the AI Chat tab as a ready-to-send prompt.
 function askClaudeToFix(errorLine) {
