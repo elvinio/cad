@@ -36,7 +36,8 @@ function applyHistory(code) {
 
 // Rebuild the gutter rows to match the textarea's line count. Each row is a
 // div whose line metrics match #editor exactly (shared CSS) so numbers align.
-// Error rows get an .err class and are clickable → jumpToLine.
+// Every row is clickable → toggles a leading "#" on its line. Error rows also
+// get an .err class for the red highlight.
 function buildGutter(force = false) {
   if (!gutter || !textarea) return;
   const count = textarea.value.split('\n').length;
@@ -47,15 +48,31 @@ function buildGutter(force = false) {
     const row = document.createElement('div');
     row.className = 'gutter-row';
     row.textContent = n;
-    if (errorLines.has(n)) {
-      row.classList.add('err');
-      row.title = `Error on line ${n} — click to jump`;
-      row.addEventListener('click', () => jumpToLine(n));
-    }
+    row.title = errorLines.has(n)
+      ? `Error on line ${n} — click to toggle "#"`
+      : `Click to toggle "#" on line ${n}`;
+    if (errorLines.has(n)) row.classList.add('err');
+    row.addEventListener('click', () => toggleCommentLine(n));
     frag.appendChild(row);
   }
   gutter.textContent = '';
   gutter.appendChild(frag);
+}
+
+// Prepend "#" to the given line, or remove it if already present, then
+// re-render like any other edit (debounced history push + code:changed).
+function toggleCommentLine(lineNo) {
+  if (!textarea) return;
+  const lines = textarea.value.split('\n');
+  const idx = lineNo - 1;
+  if (idx < 0 || idx >= lines.length) return;
+  lines[idx] = lines[idx].startsWith('#') ? lines[idx].slice(1) : '#' + lines[idx];
+  textarea.value = lines.join('\n');
+  buildGutter(true);
+  onChange(textarea.value);
+  emit('code:changed', { code: textarea.value });
+  clearTimeout(pushDebounceTimer);
+  pushDebounceTimer = setTimeout(() => pushHistory(textarea.value), 1000);
 }
 
 export function setErrorLines(lineNos) {
