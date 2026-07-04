@@ -9,199 +9,24 @@
 import { getSettings, saveSettings, getProject,
   getChatSessions, saveChatSession, deleteChatSession, getAllChatSessions,
   putChatImage, getChatImage, deleteChatImages } from './storage.js';
-import { emit, subscribe } from './state.js';
-import { getCode, setCode } from './editor.js';
-import { updateActiveCode, switchToProject } from './projects.js';
-import { CURATED } from './libraries.js';
-import { getParamValues, getParamSchema, applyParamOverrides } from './customizer.js';
-import { getMeshStats } from './viewer.js';
-import { captureSnapshot, captureMultiView, captureLookAt } from './viewer/capture.js';
+import { subscribe } from './state.js';
+import { getCode } from './editor.js';
+import { switchToProject } from './projects.js';
+import { captureSnapshot } from './viewer/capture.js';
 import { toast } from './ui.js';
+import { getHistory, setHistory, pushHistory, getLastCode, setLastCode } from './chat/session-state.js';
+import {
+  DEFAULT_SYSTEM_PROMPT, getSystemPrompt, buildSystemPrompt, availableLibsBlock, currentParamsBlock,
+  getChatConfig, streamChatCompletion, isAbortError, toolResultToOpenAI,
+} from './chat/protocol.js';
+import { runTool } from './chat/tools.js';
 
-export const DEFAULT_SYSTEM_PROMPT =
-`You are an expert CAD designer working inside ScadPad, a mobile OpenSCAD editor. You edit the user's OpenSCAD code through tools, the way a coding assistant edits a file. The current code and Customizer parameters are given once, in <current_code> and <current_params> tags, at the start of the conversation.
-
-Tools:
-- read_code: read the current editor code, optionally a line range. Lines come back numbered. The code may have changed since you last saw it (the user can edit too) — if a message tells you the code changed, or before any edit you're unsure about, call read_code first to get fresh line numbers.
-- edit_code: replace an inclusive line range (start_line..end_line) with new_text. Line numbers MUST match the latest read_code; if the code changed since your last read the edit is rejected and you must read_code again.
-- write_code: replace the WHOLE file. Use for new models from scratch or large rewrites.
-- get_params / set_params: read the Customizer parameters and change their values. Parameters are top-level variables that drive the geometry; changing them re-renders the model and is usually better than hard-coding numbers into the code.
-- look: render and return a 2×2 image of the model — ISO (corner), FRONT (-Y), RIGHT (+X), TOP (down -Z) — in OpenSCAD's Z-up frame. edit_code/write_code/set_params only report compile status and the bounding box as text; call look when you want to actually SEE the result. The image is perspective — judge sizes from the reported bounding box, not pixels. Use this first for a general check.
-- look_at: one free-angle, full-resolution image for close-up inspection — pick any yaw/pitch and zoom in, instead of the four fixed corners of look. Also lets you switch to wireframe (see through to hidden edges/internal cavities) or ghost/translucent (see overlapping solids at once) for the shot. Use it after look when you need to check a specific feature look's quartered view is too small or the wrong angle for — e.g. a chamfer, a hole alignment, wall thickness, or whether two parts actually intersect.
-- lookup_lib: search the installed BOSL2 library for the exact signature of a module or function (e.g. "rounded box", "gear", "screw thread"). Returns names, one-line synopses, usage signatures and argument names. Use it BEFORE calling a library module you're not 100% sure of — do not guess argument names.
-
-Building blocks: you don't have to model everything from raw primitives. The libraries listed in <available_libraries> are pre-made parts you compose like Lego. Prefer them when one fits — especially BOSL2 (include <BOSL2/std.scad>) for rounded/chamfered shapes, attachments, gears, screws and threads. Only include a library that is actually listed in <available_libraries>; if the user wants something that needs a library that isn't installed, say so briefly instead of guessing. For the common cases, plain OpenSCAD primitives + CSG (cube/cylinder/sphere, union/difference/intersection/hull) are still the simplest choice.
-
-Workflow: make a change with edit_code/write_code/set_params, read the text result; if it failed to compile, fix it; when you want to verify the shape, call look. When the model is right, stop and give a one- or two-sentence summary.
-
-Rules:
-- Prefer small edit_code edits over rewriting the whole file.
-- Keep the code valid OpenSCAD (units are millimetres). Preserve the user's Customizer parameters (top-level variables with their // [min:max] annotations and // descriptions) unless asked to change them; tweak values with set_params rather than editing the annotations. For new models, expose the key dimensions as such top-level variables so the result is parametric.
-- Don't guess library argument names — call lookup_lib first. Confirm a finished shape with look before declaring it done.
-- Render results may include an "OpenSCAD messages" section — read it. Fix the cause of any WARNING/DEPRECATED (e.g. undefined variable, deprecated call) even if the model still compiled. Renders that fall back to the slower CGAL backend usually mean a pathological shape (e.g. hull() of many spheres at high $fn) — simplify it.
-- Keep explanations brief — the user is on a phone.
-- If a request is ambiguous, make a sensible choice and note it briefly rather than asking questions.`;
-
-// Always-on BOSL2 starter kit: the handful of modules that cover most requests,
-// appended to the system prompt only when BOSL2 is installed so even a zero-
-// tool-call reply composes them correctly. The long tail goes through lookup_lib.
-const CORE_BOSL2 =
-`BOSL2 quick reference (include <BOSL2/std.scad>; anchors: TOP/BOTTOM/LEFT/RIGHT/FWD/BACK/CENTER, combine with +):
-- cuboid(size, [rounding=], [chamfer=], [edges=], [anchor=], [spin=], [orient=]) — box with rounded/chamfered edges.
-- cyl(h=, r=|d=, [rounding=], [chamfer=], [anchor=]) — cylinder with rounded ends; rounded_prism/prismoid for tapers.
-- tube(h=, or=|od=, ir=|id=|wall=, [anchor=]) — hollow cylinder.
-- sphere(r=|d=), spheroid(r=|d=, [circum=]) — spheres.
-- prismoid(size1=, size2=, h=, [rounding=], [chamfer=]) — tapered box / pyramid frustum.
-- attach(parent_anchor, child_anchor) CHILD; / position(anchor) CHILD; — place a child on a parent's face without manual translate/rotate.
-- xcopies/ycopies/zcopies(spacing=|n=) CHILD; , grid_copies(spacing=, n=) CHILD; — repeat children in a line or grid.
-- linear_sweep(region, h=), rotate_sweep(region, angle=) — extrude/revolve a 2D shape.
-- screw(spec, length=, [head=]), nut(spec), threaded_rod(d=, l=, pitch=) — standard fasteners and threads.
-- spur_gear(circ_pitch=|mod=, teeth=, thickness=), rack(...), bevel_gear(...) — gears.
-Call lookup_lib for exact signatures of anything else.`;
-
-// Tools the model can call. read_code/edit_code/write_code/get_params/set_params
-// all operate on the live editor + customizer; look/look_at render and return an
-// image. Handlers live in runTool(); most return text only (the model uses
-// look/look_at to see images), keeping per-turn token cost down.
-const TOOLS = [
-  {
-    name: 'read_code',
-    description:
-      'Read the current OpenSCAD editor code. Returns the lines numbered (1-based). '
-      + 'Omit the range to read the whole file, or pass start_line/end_line to read a slice. '
-      + 'Always read before editing if the code may have changed since you last saw it.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        start_line: { type: 'integer', description: 'First line to read (1-based, inclusive). Optional.' },
-        end_line: { type: 'integer', description: 'Last line to read (1-based, inclusive). Optional.' },
-      },
-    },
-  },
-  {
-    name: 'edit_code',
-    description:
-      'Replace the inclusive line range start_line..end_line with new_text, then render. '
-      + 'Line numbers must match the most recent read_code; if the code changed since then the '
-      + 'edit is rejected — call read_code again first. To insert without removing lines, set '
-      + 'end_line = start_line - 1. Returns compile status and bounding box as text (call look to see it).',
-    input_schema: {
-      type: 'object',
-      properties: {
-        start_line: { type: 'integer', description: 'First line to replace (1-based, inclusive).' },
-        end_line: { type: 'integer', description: 'Last line to replace (1-based, inclusive). Use start_line-1 to insert.' },
-        new_text: { type: 'string', description: 'Replacement text for the range (may be multiple lines, no trailing newline needed).' },
-      },
-      required: ['start_line', 'end_line', 'new_text'],
-    },
-  },
-  {
-    name: 'write_code',
-    description:
-      'Replace the ENTIRE editor contents with `code`, then render. Use for new models or large '
-      + 'rewrites; prefer edit_code for small changes. Returns compile status and bounding box as text.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        code: { type: 'string', description: 'The complete OpenSCAD source for the whole file.' },
-      },
-      required: ['code'],
-    },
-  },
-  {
-    name: 'get_params',
-    description:
-      'List the Customizer parameters (top-level variables that drive the geometry) with their '
-      + 'current value, default, and any min/max/options. Returns JSON.',
-    input_schema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'set_params',
-    description:
-      'Set one or more Customizer parameter values and re-render. Pass `params` as a map of '
-      + '{parameter_name: value}. Changing parameters affects how the model looks. Returns compile '
-      + 'status and bounding box as text (call look to see it). Use get_params first to learn valid names.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        params: {
-          type: 'object',
-          description: 'Map of parameter name to new value, e.g. {"width": 40, "rounded": true}.',
-          additionalProperties: true,
-        },
-      },
-      required: ['params'],
-    },
-  },
-  {
-    name: 'look',
-    description:
-      'Render the current model and return a 2×2 image (ISO, FRONT, RIGHT, TOP views in OpenSCAD '
-      + 'Z-up) plus the bounding-box dimensions. Call this whenever you want to see the result.',
-    input_schema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'look_at',
-    description:
-      'Render one free-angle, full-resolution image of the model for close-up inspection — use it '
-      + 'to zoom into a specific feature or view an angle the fixed 2×2 look grid does not cover. '
-      + 'yaw_deg/pitch_deg pick the camera direction (Z-up: yaw 0 = FRONT looking along -Y, increasing '
-      + 'toward +X/RIGHT at 90; pitch 0 = horizontal, +90 = TOP, -90 = BOTTOM). zoom scales the default '
-      + 'framing distance (0.15-5; below 1 moves the camera closer, above 1 farther). style switches the '
-      + 'material for this shot only: "solid" (default), "wireframe" (see through to hidden edges), or '
-      + '"ghost" (translucent, to see overlapping/internal solids). Returns the bounding-box dimensions as text.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        yaw_deg: { type: 'number', description: 'Camera azimuth in degrees. 0=FRONT, 90=RIGHT, 180=BACK, 270/-90=LEFT. Default 45 (a corner view).' },
-        pitch_deg: { type: 'number', description: 'Camera elevation in degrees, -89..89. 0=horizontal, 90=TOP, -90=BOTTOM. Default 30.' },
-        zoom: { type: 'number', description: 'Framing distance multiplier, 0.15-5. Below 1 zooms in closer; above 1 pulls back. Default 1.' },
-        style: { type: 'string', enum: ['solid', 'wireframe', 'ghost'], description: 'Material style for this shot only. Default "solid".' },
-      },
-    },
-  },
-  {
-    name: 'lookup_lib',
-    description:
-      'Search the BOSL2 library for modules/functions matching a query and return their exact '
-      + 'signatures — name, one-line synopsis, usage forms and argument names. Use this before '
-      + 'calling a library module whose arguments you are not sure of, instead of guessing. '
-      + 'Example queries: "rounded box", "attach to face", "spur gear", "screw thread", "hex nut".',
-    input_schema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'What you are looking for, e.g. "rounded cuboid" or "metric screw".' },
-      },
-      required: ['query'],
-    },
-  },
-];
-
-// The same tools in OpenAI function-calling shape (Anthropic input_schema maps
-// 1:1 onto OpenAI parameters). Built once; sent on every request.
-const OPENAI_TOOLS = TOOLS.map(t => ({
-  type: 'function',
-  function: { name: t.name, description: t.description, parameters: t.input_schema },
-}));
-
-// Conversation state. History stores text-only content; rendered images are
-// fetched on demand by the look tool and never persisted, so old images don't
-// accumulate input-token cost.
-//
-// A "session" is one conversation. It lives in memory here and is persisted
-// (per project, text-only) to localStorage after every turn so it survives
+// Conversation state (history, lastCodeSeenByModel) lives in
+// chat/session-state.js — shared with tool handlers and session persistence.
+// A "session" is one conversation. It lives in memory there and is persisted
+// (per project, text-only) to IndexedDB after every turn so it survives
 // reloads and project switches — letting you resume an iteration later.
-let history = [];
-// The exact code string the model last read or wrote. The model's view is
-// "dirty" whenever getCode() !== this (the user edited the editor since): we
-// then re-send nothing but a note telling it to read_code, and reject line-
-// based edit_code calls until it does. applyCode() and read_code update it.
-let lastCodeSeenByModel = null;
 let busy = false;
-// Lazily-fetched BOSL2 signature index (vendor/libraries/bosl2-index.json), used
-// by the lookup_lib tool. Cached after first fetch; the SW back-fills it into the
-// cache on first use so it works offline thereafter.
-let bosl2IndexPromise = null;
 
 // Tool-loop control: stopRequested is set by the Stop button; activeController is
 // the in-flight request's AbortController so Stop can abort the current reply.
@@ -215,160 +40,6 @@ let currentSessionCreated = null;
 let previewDataUrl = null;         // last image shown in the preview dialog
 
 const $ = id => document.getElementById(id);
-
-function getSystemPrompt() {
-  return getSettings().chatSystemPrompt || DEFAULT_SYSTEM_PROMPT;
-}
-
-// The editable base prompt plus install-dependent guidance that must apply even
-// when the user has overridden the base prompt: the BOSL2 starter kit (only when
-// BOSL2 is installed). Kept out of getSystemPrompt() so the settings textarea
-// shows just the editable base and the kit can't be accidentally baked in.
-function buildSystemPrompt() {
-  let prompt = getSystemPrompt();
-  if (getSettings().installedLibs?.includes('BOSL2')) prompt += `\n\n${CORE_BOSL2}`;
-  return prompt;
-}
-
-// A first-turn-only block listing the libraries the user has installed (name +
-// what it's for + its include path) so the model knows what it may compose with.
-function availableLibsBlock() {
-  const installed = getSettings().installedLibs || [];
-  const include = name => name === 'fonts' ? 'use with text()' : `include <${name}/${name === 'BOSL2' ? 'std.scad' : '…'}>`;
-  const lines = installed.map(name => {
-    const desc = CURATED.find(c => c.name === name)?.desc || 'custom library';
-    return `- ${name} — ${desc} (${include(name)})`;
-  });
-  const body = lines.length
-    ? lines.join('\n')
-    : '- (none installed — use only plain OpenSCAD primitives; tell the user to install a library from the Libraries menu if they need one)';
-  return `\n\n<available_libraries>\n${body}\n</available_libraries>`;
-}
-
-// Lazily fetch + cache the BOSL2 signature index for lookup_lib.
-function getBosl2Index() {
-  if (!bosl2IndexPromise) {
-    bosl2IndexPromise = fetch('vendor/libraries/bosl2-index.json')
-      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-      .catch(e => { bosl2IndexPromise = null; throw e; });
-  }
-  return bosl2IndexPromise;
-}
-
-// Score entries against the query words (name hits weigh most, then synopsis,
-// then arg names) and return the top matches formatted compactly for the model.
-function searchBosl2Index(index, query) {
-  const words = String(query).toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 1);
-  if (!words.length) return [];
-  const scored = [];
-  for (const e of index.entries) {
-    const name = e.name.toLowerCase();
-    const syn = (e.synopsis || '').toLowerCase();
-    const argNames = e.args.map(a => a.name.toLowerCase()).join(' ');
-    let score = 0;
-    for (const w of words) {
-      if (name === w) score += 12;
-      else if (name.includes(w)) score += 6;
-      if (syn.includes(w)) score += 3;
-      if (argNames.includes(w)) score += 1;
-    }
-    if (score) scored.push({ score, e });
-  }
-  scored.sort((a, b) => b.score - a.score || a.e.name.localeCompare(b.e.name));
-  return scored.slice(0, 8).map(s => s.e);
-}
-
-function formatBosl2Match(e) {
-  const usage = e.usage.length ? e.usage.map(u => `    ${u}`).join('\n') : '    (see Arguments)';
-  const args = e.args.length ? `\n  args: ${e.args.map(a => a.name).join(', ')}` : '';
-  return `• ${e.name} — ${e.synopsis} [${e.file}]\n${usage}${args}`;
-}
-
-// Build the request config from settings (proxy URL + bearer key + model). The
-// browser talks to the Modal proxy, which forwards to the Gemma auto endpoint.
-function getChatConfig() {
-  const { modalBaseUrl, modalApiKey, chatModel } = getSettings();
-  if (!modalBaseUrl) throw new Error('Set your Modal proxy URL in Chat settings.');
-  if (!modalApiKey) throw new Error('Set your Modal API key in Chat settings.');
-  return {
-    url: modalBaseUrl.replace(/\/+$/, '') + '/v1/chat/completions',
-    model: chatModel,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${modalApiKey}`,
-    },
-  };
-}
-
-// POST one chat-completion and consume the SSE stream. Calls onText(delta) as
-// assistant text arrives; accumulates any tool calls (streamed in fragments,
-// keyed by index) and the final usage. Returns
-// { text, toolCalls:[{id,name,arguments}], finishReason, usage }.
-async function streamChatCompletion({ config, messages, signal, onText }) {
-  const res = await fetch(config.url, {
-    method: 'POST',
-    headers: config.headers,
-    signal,
-    body: JSON.stringify({
-      model: config.model,
-      messages,
-      tools: OPENAI_TOOLS,
-      tool_choice: 'auto',
-      stream: true,
-      stream_options: { include_usage: true },
-    }),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`HTTP ${res.status} ${res.statusText}${body ? ` — ${body.slice(0, 300)}` : ''}`);
-  }
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let text = '';
-  let finishReason = null;
-  let usage = null;
-  const toolCalls = []; // index -> { id, name, arguments }
-
-  const handleEvent = (raw) => {
-    // Each SSE event is one or more `data:` lines; collect their payloads.
-    const data = raw.split('\n')
-      .filter(l => l.startsWith('data:'))
-      .map(l => l.slice(5).trim())
-      .join('');
-    if (!data || data === '[DONE]') return;
-    let json;
-    try { json = JSON.parse(data); } catch { return; }
-    if (json.usage) usage = json.usage;
-    const choice = json.choices?.[0];
-    if (!choice) return;
-    const delta = choice.delta || {};
-    if (delta.content) { text += delta.content; onText?.(delta.content); }
-    for (const tc of delta.tool_calls || []) {
-      const i = tc.index ?? 0;
-      const slot = toolCalls[i] || (toolCalls[i] = { id: '', name: '', arguments: '' });
-      if (tc.id) slot.id = tc.id;
-      if (tc.function?.name) slot.name = tc.function.name;
-      if (tc.function?.arguments) slot.arguments += tc.function.arguments;
-    }
-    if (choice.finish_reason) finishReason = choice.finish_reason;
-  };
-
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let sep;
-    while ((sep = buffer.indexOf('\n\n')) !== -1) {
-      handleEvent(buffer.slice(0, sep));
-      buffer = buffer.slice(sep + 2);
-    }
-  }
-  if (buffer.trim()) handleEvent(buffer);
-
-  return { text, toolCalls: toolCalls.filter(Boolean), finishReason, usage };
-}
 
 // ---------- message rendering ----------
 
@@ -455,36 +126,13 @@ function setBubbleStats(msg, meta) {
   msg.appendChild(stats);
 }
 
-function addNote(text, isError = false) {
+export function addNote(text, isError = false) {
   const container = $('chat-messages');
   const note = document.createElement('p');
   note.className = `chat-note${isError ? ' error' : ''}`;
   note.textContent = text;
   container.appendChild(note);
   container.scrollTop = container.scrollHeight;
-}
-
-// ---------- code apply ----------
-
-function applyCode(code) {
-  setCode(code);
-  updateActiveCode(code);
-  lastCodeSeenByModel = code;
-  emit('code:changed', { code, immediate: true });
-}
-
-// A <current_params> block listing each Customizer parameter's current value,
-// sent once alongside <current_code> on the first turn (empty string if the
-// model has no parameters). After that the model uses get_params/set_params.
-function currentParamsBlock() {
-  const schema = getParamSchema();
-  if (!schema.length) return '';
-  const overrides = getParamValues();
-  const lines = schema.map((p) => {
-    const v = (p.name in overrides) ? overrides[p.name] : p.initial;
-    return `${p.name} = ${JSON.stringify(v)}`;
-  });
-  return `\n\n<current_params>\n${lines.join('\n')}\n</current_params>`;
 }
 
 // ---------- busy / status UI ----------
@@ -501,7 +149,7 @@ function setBusy(on) {
 
 // A single status line at the bottom of the transcript: animated dots plus a
 // label ("Thinking…" / "Rendering…"). Pass null to remove it.
-function setStatus(text) {
+export function setStatus(text) {
   const container = $('chat-messages');
   let el = $('chat-status');
   if (!text) { el?.remove(); return; }
@@ -526,7 +174,7 @@ function setStatus(text) {
 // Show a rendered-image button in the transcript; clicking opens it in the
 // preview modal. This is exactly the image handed to the model as the tool
 // result, so the user can see what Claude saw.
-function addImageButton(label, dataUrl, caption) {
+export function addImageButton(label, dataUrl, caption) {
   const container = $('chat-messages');
   const row = document.createElement('div');
   row.className = 'chat-tool-row';
@@ -643,245 +291,6 @@ function describeToolUse(name, input) {
   }
 }
 
-// ---------- tool handlers ----------
-
-// Resolve once the render settles (render:done / render:error) after running
-// `trigger` (which mutates code or params). Subscribing before triggering avoids
-// missing a fast render.
-function awaitRender(trigger) {
-  return new Promise((resolve) => {
-    let settled = false;
-    const logs = [];
-    const offLog = subscribe('render:log', (m) => { const l = (m?.line ?? '').trim(); if (l) logs.push(l); });
-    const finish = (res) => {
-      if (settled) return;
-      settled = true;
-      offDone(); offErr(); offLog(); clearTimeout(timer);
-      resolve({ ...res, logs });
-    };
-    const offDone = subscribe('render:done', (p) => finish({ ok: true, elapsedMs: p.elapsedMs }));
-    const offErr = subscribe('render:error', (p) => finish({ ok: false, error: p.message }));
-    const timer = setTimeout(() => finish({ ok: false, error: 'Render timed out after 90s.' }), 90000);
-    trigger();
-  });
-}
-
-// OpenSCAD prints "Could not initialize localization" on every run (harmless).
-const LOG_NOISE = /Could not initialize localization/i;
-
-// Pull the warnings/errors worth showing the model out of a render's log lines:
-// deduped, capped, noise filtered. Surfaced on success too (e.g. deprecated
-// calls or undefined-variable warnings that compiled anyway) so it can fix them.
-function notableLogs(logs) {
-  const seen = new Set();
-  const out = [];
-  for (const l of logs || []) {
-    if (!/\b(WARNING|ERROR|DEPRECATED)\b/i.test(l) || LOG_NOISE.test(l) || seen.has(l)) continue;
-    seen.add(l);
-    out.push(l);
-    if (out.length >= 8) break;
-  }
-  return out;
-}
-
-const applyAndAwaitRender = (code) => awaitRender(() => applyCode(code));
-
-function dimsLine() {
-  const stats = getMeshStats();
-  return stats
-    ? `${stats.size[0]} × ${stats.size[1]} × ${stats.size[2]} mm · ${stats.triangles} tris`
-    : 'unknown size';
-}
-
-// Text tool_result after an apply/param change (no image — the model uses look).
-function renderResultText(res) {
-  const notes = notableLogs(res.logs);
-  const msgBlock = notes.length ? `\nOpenSCAD messages:\n${notes.map(l => `  ${l}`).join('\n')}` : '';
-  if (!res.ok) {
-    addNote(`Render failed: ${res.error}`, true);
-    return `Render failed: ${res.error}${msgBlock}\nFix the problem and try again.`;
-  }
-  return `Render OK. Bounding box ${dimsLine()}.${msgBlock}\nCall look to see the model.`;
-}
-
-function runReadCode(input) {
-  const code = getCode();
-  lastCodeSeenByModel = code; // the model now has an up-to-date view
-  const lines = code.split('\n');
-  let start = Number.isFinite(input?.start_line) ? Math.max(1, Math.floor(input.start_line)) : 1;
-  let end = Number.isFinite(input?.end_line) ? Math.min(lines.length, Math.floor(input.end_line)) : lines.length;
-  if (start > end) {
-    return [{ type: 'text', text: `Invalid range: start_line ${start} > end_line ${end}. The file has ${lines.length} lines.` }];
-  }
-  const width = String(end).length;
-  const numbered = lines.slice(start - 1, end)
-    .map((l, i) => `${String(start + i).padStart(width)}\t${l}`).join('\n');
-  return [{ type: 'text', text: `${lines.length} lines total.\n${numbered || '(empty)'}` }];
-}
-
-async function runEditCode(input) {
-  const current = getCode();
-  if (current !== lastCodeSeenByModel) {
-    return [{ type: 'text',
-      text: 'The editor code changed since your last read_code, so these line numbers may be stale. '
-        + 'Call read_code again, then redo the edit.' }];
-  }
-  const lines = current.split('\n');
-  const start = Math.floor(input?.start_line);
-  const end = Math.floor(input?.end_line);
-  if (!Number.isInteger(start) || !Number.isInteger(end)
-      || start < 1 || start > lines.length + 1 || end < start - 1 || end > lines.length) {
-    return [{ type: 'text',
-      text: `Invalid range start_line=${input?.start_line} end_line=${input?.end_line}. `
-        + `The file has ${lines.length} lines (use end_line = start_line - 1 to insert).` }];
-  }
-  const newLines = String(input?.new_text ?? '').split('\n');
-  const newCode = [...lines.slice(0, start - 1), ...newLines, ...lines.slice(end)].join('\n');
-  setStatus('Rendering…');
-  return [{ type: 'text', text: renderResultText(await applyAndAwaitRender(newCode)) }];
-}
-
-async function runWriteCode(input) {
-  setStatus('Rendering…');
-  return [{ type: 'text', text: renderResultText(await applyAndAwaitRender(String(input?.code ?? ''))) }];
-}
-
-function runGetParams() {
-  const schema = getParamSchema();
-  if (!schema.length) {
-    return [{ type: 'text', text: 'This model has no Customizer parameters (no annotated top-level variables).' }];
-  }
-  const overrides = getParamValues();
-  const list = schema.map(p => ({
-    name: p.name,
-    type: p.type,
-    current: (p.name in overrides) ? overrides[p.name] : p.initial,
-    default: p.initial,
-    ...(p.min !== undefined ? { min: p.min } : {}),
-    ...(p.max !== undefined ? { max: p.max } : {}),
-    ...(Array.isArray(p.options) && p.options.length ? { options: p.options.map(o => o.value) } : {}),
-    ...(p.group ? { group: p.group } : {}),
-  }));
-  return [{ type: 'text', text: JSON.stringify({ parameters: list }, null, 2) }];
-}
-
-async function runSetParams(input) {
-  const params = input?.params;
-  if (!params || typeof params !== 'object' || Array.isArray(params) || !Object.keys(params).length) {
-    return [{ type: 'text', text: 'set_params needs a non-empty `params` object, e.g. {"width": 40}.' }];
-  }
-  if (!getParamSchema().length) {
-    return [{ type: 'text', text: 'This model has no Customizer parameters to set. Edit the code instead.' }];
-  }
-  const known = new Set(getParamSchema().map(p => p.name));
-  const unknown = Object.keys(params).filter(n => !known.has(n));
-  if (unknown.length === Object.keys(params).length) {
-    return [{ type: 'text', text: `Unknown parameter(s): ${unknown.join(', ')}. Call get_params for valid names.` }];
-  }
-  setStatus('Rendering…');
-  const res = await awaitRender(() => applyParamOverrides(params));
-  let text = renderResultText(res);
-  if (res.ok) text += `\nCurrent overrides: ${JSON.stringify(getParamValues())}`;
-  if (unknown.length) text += `\n(Ignored unknown parameter(s): ${unknown.join(', ')}.)`;
-  return [{ type: 'text', text }];
-}
-
-function runLook() {
-  const img = captureMultiView();
-  if (!img) {
-    return [{ type: 'text', text: 'Nothing is rendered yet — apply or fix the code first, then look again.' }];
-  }
-  const dims = dimsLine();
-  const label = 'View render — iso · front · right · top';
-  addImageButton(label, `data:${img.mediaType};base64,${img.data}`, `Bounding box: ${dims}`);
-  const content = [
-    { type: 'text', text: `Bounding box ${dims}. The image is a 2×2 grid: ISO, FRONT, RIGHT, TOP in OpenSCAD Z-up.` },
-    { type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } },
-  ];
-  content.imageLabel = label; // read by send() when recording the history step
-  return content;
-}
-
-function runLookAt(input) {
-  const yawDeg = Number.isFinite(input?.yaw_deg) ? input.yaw_deg : 45;
-  const pitchDeg = Number.isFinite(input?.pitch_deg) ? input.pitch_deg : 30;
-  const zoom = Number.isFinite(input?.zoom) ? input.zoom : 1;
-  const style = typeof input?.style === 'string' ? input.style : 'solid';
-  const img = captureLookAt({ yawDeg, pitchDeg, zoom, style });
-  if (!img) {
-    return [{ type: 'text', text: 'Nothing is rendered yet — apply or fix the code first, then look_at again.' }];
-  }
-  const dims = dimsLine();
-  const label = `View render — yaw ${img.yawDeg}°, pitch ${img.pitchDeg}°, zoom ${img.zoom}×${img.style !== 'solid' ? `, ${img.style}` : ''}`;
-  addImageButton(label, `data:${img.mediaType};base64,${img.data}`, `Bounding box: ${dims}`);
-  const content = [
-    { type: 'text', text: `Bounding box ${dims}. Single view at yaw ${img.yawDeg}°, pitch ${img.pitchDeg}°, zoom ${img.zoom}×, style ${img.style} (OpenSCAD Z-up).` },
-    { type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } },
-  ];
-  content.imageLabel = label; // read by send() when recording the history step
-  return content;
-}
-
-async function runLookupLib(input) {
-  const query = (input?.query || '').trim();
-  if (!query) return [{ type: 'text', text: 'lookup_lib needs a `query`, e.g. "rounded box" or "spur gear".' }];
-  if (!getSettings().installedLibs?.includes('BOSL2')) {
-    return [{ type: 'text', text: 'BOSL2 is not installed, so its signatures are unavailable. Tell the user to install BOSL2 from the Libraries menu, or build the model from plain OpenSCAD primitives.' }];
-  }
-  let index;
-  try {
-    index = await getBosl2Index();
-  } catch (e) {
-    return [{ type: 'text', text: `Could not load the BOSL2 index (${e.message}). Fall back to plain OpenSCAD primitives.` }];
-  }
-  const matches = searchBosl2Index(index, query);
-  if (!matches.length) {
-    return [{ type: 'text', text: `No BOSL2 module matched "${query}". Try different keywords, or build it from primitives.` }];
-  }
-  const text = `BOSL2 matches for "${query}" (include <BOSL2/std.scad>):\n\n`
-    + matches.map(formatBosl2Match).join('\n\n');
-  return [{ type: 'text', text }];
-}
-
-// Dispatch one tool_use block to its handler, returning tool_result content.
-async function runTool(block) {
-  switch (block.name) {
-    case 'read_code':  return runReadCode(block.input || {});
-    case 'edit_code':  return await runEditCode(block.input || {});
-    case 'write_code': return await runWriteCode(block.input || {});
-    case 'get_params': return runGetParams();
-    case 'set_params': return await runSetParams(block.input || {});
-    case 'look':       return runLook();
-    case 'look_at':    return runLookAt(block.input || {});
-    case 'lookup_lib': return await runLookupLib(block.input || {});
-    default:           return [{ type: 'text', text: `Unknown tool: ${block.name}` }];
-  }
-}
-
-function isAbortError(e) {
-  return e?.name === 'AbortError' || e?.name === 'APIUserAbortError' || /abort/i.test(e?.message || '');
-}
-
-// Convert a runTool() result (Anthropic content blocks) into the OpenAI messages
-// that report it back to the model. Text always goes in the `tool` message; an
-// image (only look/look_at return one) can't live in a `tool` message, so it's
-// appended as a follow-up user message with an image_url part.
-function toolResultToOpenAI(callId, content) {
-  const text = content.filter(b => b.type === 'text').map(b => b.text).join('\n') || '(no output)';
-  const msgs = [{ role: 'tool', tool_call_id: callId, content: text }];
-  const img = content.find(b => b.type === 'image');
-  if (img) {
-    msgs.push({
-      role: 'user',
-      content: [
-        { type: 'text', text: '(rendered image for the look tool result above)' },
-        { type: 'image_url', image_url: { url: `data:${img.source.media_type};base64,${img.source.data}` } },
-      ],
-    });
-  }
-  return msgs;
-}
-
 // ---------- send ----------
 
 // Stop the current reply: abort the in-flight request and break the loop after
@@ -917,15 +326,15 @@ async function send() {
   // code; if the user edited the editor since the model last read it, we just
   // tell it so it knows to read_code again (the "dirty" signal).
   let userText = prompt;
-  if (history.length === 0) {
+  if (getHistory().length === 0) {
     const code = getCode();
     userText = `<current_code>\n${code}\n</current_code>${currentParamsBlock()}${availableLibsBlock()}\n\n${prompt}`;
-    lastCodeSeenByModel = code;
-  } else if (getCode() !== lastCodeSeenByModel) {
+    setLastCode(code);
+  } else if (getCode() !== getLastCode()) {
     userText = `${prompt}\n\n[The editor code has changed since you last read it — call read_code before editing.]`;
   }
   const userTs = Date.now();
-  history.push({ role: 'user', content: userText, ts: userTs });
+  pushHistory({ role: 'user', content: userText, ts: userTs });
 
   addBubble('user', prompt, { ts: userTs });
 
@@ -934,7 +343,7 @@ async function send() {
   // appended here, not persisted.
   const messages = [
     { role: 'system', content: buildSystemPrompt() },
-    ...history.map(m => ({ role: m.role, content: m.content })),
+    ...getHistory().map(m => ({ role: m.role, content: m.content })),
   ];
 
   const maxTurns = Math.max(1, Number(settings.chatMaxTurns) || 100);
@@ -1064,8 +473,8 @@ async function send() {
     // Nothing applied and no reply text: drop the user turn so a retry resends
     // it (with <current_code>) cleanly.
     if (!assistantTextParts.length) {
-      history.pop();
-      lastCodeSeenByModel = null;
+      getHistory().pop();
+      setLastCode(null);
     }
   } finally {
     setStatus(null);
@@ -1074,7 +483,7 @@ async function send() {
   }
 
   if (!failed && (assistantTextParts.length || steps.length)) {
-    history.push({
+    pushHistory({
       role: 'assistant',
       content: assistantTextParts.join('\n\n') || '(no reply text — see tool calls)',
       ts: Date.now(),
@@ -1114,8 +523,8 @@ function displayText(content) {
 }
 
 function resetSessionState() {
-  history = [];
-  lastCodeSeenByModel = null;
+  setHistory([]);
+  setLastCode(null);
   currentSessionId = null;
   currentSessionCreated = null;
 }
@@ -1148,6 +557,7 @@ function renderAssistantSteps(steps) {
 function renderHistoryToUI() {
   const container = $('chat-messages');
   container.textContent = '';
+  const history = getHistory();
   if (!history.length) { showEmptyHint(); return; }
   for (const m of history) {
     if (m.role === 'assistant' && Array.isArray(m.steps) && m.steps.length) {
@@ -1160,6 +570,7 @@ function renderHistoryToUI() {
 
 // Write the in-memory conversation back to IndexedDB (no-op when empty).
 async function persistCurrentSession() {
+  const history = getHistory();
   if (!history.length) return;
   if (!currentSessionId) currentSessionId = crypto.randomUUID();
   if (!currentSessionCreated) currentSessionCreated = Date.now();
@@ -1170,7 +581,7 @@ async function persistCurrentSession() {
     id: currentSessionId,
     title,
     messages: history,
-    lastCodeSeenByModel,
+    lastCodeSeenByModel: getLastCode(),
     created: currentSessionCreated,
   });
 }
@@ -1201,6 +612,7 @@ const newChat = () => chainOp(async () => {
 // any images it referenced) instead of archiving it. Distinct from New chat,
 // which keeps the old conversation around in the history list.
 const clearCurrentChat = () => chainOp(async () => {
+  const history = getHistory();
   if (!history.length) return;
   if (!confirm('Delete this conversation? This cannot be undone.')) return;
   if (currentSessionId) {
@@ -1215,8 +627,8 @@ const clearCurrentChat = () => chainOp(async () => {
 // Continue a saved conversation (archives the current one first).
 const loadSession = (sess) => chainOp(async () => {
   await persistCurrentSession();
-  history = sess.messages.map(m => ({ role: m.role, content: m.content, ts: m.ts, meta: m.meta, steps: m.steps }));
-  lastCodeSeenByModel = sess.lastCodeSeenByModel ?? null;
+  setHistory(sess.messages.map(m => ({ role: m.role, content: m.content, ts: m.ts, meta: m.meta, steps: m.steps })));
+  setLastCode(sess.lastCodeSeenByModel ?? null);
   currentSessionId = sess.id;
   currentSessionCreated = sess.created;
   renderHistoryToUI();
@@ -1231,8 +643,8 @@ const onProjectChanged = ({ project }) => chainOp(async () => {
   const sessions = await getChatSessions(currentProjectId);
   if (sessions.length) {
     const s = sessions[0];
-    history = s.messages.map(m => ({ role: m.role, content: m.content, ts: m.ts, meta: m.meta, steps: m.steps }));
-    lastCodeSeenByModel = s.lastCodeSeenByModel ?? null;
+    setHistory(s.messages.map(m => ({ role: m.role, content: m.content, ts: m.ts, meta: m.meta, steps: m.steps })));
+    setLastCode(s.lastCodeSeenByModel ?? null);
     currentSessionId = s.id;
     currentSessionCreated = s.created;
   }
