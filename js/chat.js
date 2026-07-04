@@ -14,7 +14,8 @@ import { getCode, setCode } from './editor.js';
 import { updateActiveCode, switchToProject } from './projects.js';
 import { CURATED } from './libraries.js';
 import { getParamValues, getParamSchema, applyParamOverrides } from './customizer.js';
-import { captureSnapshot, captureMultiView, captureLookAt, getMeshStats } from './viewer.js';
+import { getMeshStats } from './viewer.js';
+import { captureSnapshot, captureMultiView, captureLookAt } from './viewer/capture.js';
 import { toast } from './ui.js';
 
 export const DEFAULT_SYSTEM_PROMPT =
