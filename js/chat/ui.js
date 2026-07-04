@@ -6,11 +6,7 @@
 import { getChatImage } from '../storage.js';
 import { toast } from '../ui.js';
 import { captureSnapshot } from '../viewer/capture.js';
-// displayText still lives in chat.js until chat/sessions.js exists (Step 4
-// of the split). Only referenced inside renderHistoryToUI's body below, never
-// at this module's own top level, so this circular import is safe regardless
-// of which of chat.js/chat/ui.js the module loader evaluates first.
-import { displayText } from '../chat.js';
+import { displayText } from './sessions.js';
 
 export const $ = id => document.getElementById(id);
 

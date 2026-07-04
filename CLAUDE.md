@@ -24,7 +24,11 @@ js/topics.js       event bus CONTRACT: topic-name constants + JSDoc payload type
 js/storage.js      localStorage (projects, settings) + IndexedDB (library zips, chat sessions)
 js/render-manager.js  debounce, one-in-flight queue, cancel-by-terminate, CGAL fallback
 js/worker/openscad-worker.js  module worker: owns wasm instance, mounts libs, runs CLI
-js/viewer.js       Three.js scene + OrbitControls + hand-written OFF parser
+js/viewer.js       Three.js scene/camera/renderer core, single-file scad mesh pipeline, camera framing
+js/viewer/off.js          OFF/COFF text -> BufferGeometry parser
+js/viewer/measure.js      two-point measurement tool (snap-to-vertex/edge)
+js/viewer/capture.js      snapshot/multi-view/look_at image capture for the AI chat
+js/viewer/assembly-view.js  assembly part rendering, transform gizmo, fit/clash engine
 js/editor.js       plain <textarea>: Tab/Enter handling, Ctrl+S, autosave via onChange
 js/customizer.js   ParameterSet JSON -> form controls -> override values
 js/projects.js     project CRUD dialog + active-project lifecycle
@@ -33,7 +37,12 @@ js/export.js       STL render -> showSaveFilePicker / <a download> / Drive uploa
 js/gdrive.js       Google Identity Services token client + Drive REST v3 + sync
 js/settings.js     settings dialog (backend, quality, Client ID, OpenRouter key, storage)
 js/ui.js           tabs, dialogs, toasts, console log panel, status dot
-js/chat.js         AI Chat tab: OpenAI chat-completions (fetch + SSE) → Modal proxy; streams, applies code
+js/chat.js         AI Chat orchestrator: send()/stop() turn loop + initChat() DOM wiring
+js/chat/protocol.js   request config, SSE streaming parser, outgoing-message shaping
+js/chat/tools.js      tool schemas (read/edit/write_code, get/set_params, look, look_at, lookup_lib) + runTool()
+js/chat/ui.js         transcript rendering: bubbles, status line, tool rows, image preview
+js/chat/sessions.js   session persistence (IndexedDB) + both history dialogs
+js/chat/session-state.js  shared in-memory history/lastCodeSeenByModel getters/setters
 sw.js              service worker: cache-first app shell, tolerant wasm precache
 (modal/gemma_proxy.py  Modal CORS+auth proxy — source now in elvinio/health repo, deployed separately)
 vendor/openscad/   openscad.js + openscad.wasm (see "Provenance" below)
@@ -112,12 +121,12 @@ curated zips (from openscad-playground's npm dist) have files at the zip root.
 
 ### Chat provider (Modal-hosted Gemma, OpenAI protocol)
 
-`js/chat.js` has no SDK dependency: the transport is a hand-rolled `fetch` to
-`POST {proxyURL}/v1/chat/completions` with `stream:true`, and a small SSE parser
-(`streamChatCompletion`) that accumulates assistant text, tool calls (streamed in
-fragments, keyed by `index`), and the final `usage`. Tools are sent in OpenAI
-function shape (`OPENAI_TOOLS`, mapped from the Anthropic-shaped `TOOLS` whose
-`input_schema` == OpenAI `parameters`). The system prompt is the first `role:'system'`
+The chat feature has no SDK dependency: `js/chat/protocol.js`'s transport is a
+hand-rolled `fetch` to `POST {proxyURL}/v1/chat/completions` with `stream:true`,
+and a small SSE parser (`streamChatCompletion`) that accumulates assistant text,
+tool calls (streamed in fragments, keyed by `index`), and the final `usage`. Tools
+are sent in OpenAI function shape (mapped from `js/chat/tools.js`'s Anthropic-shaped
+`TOOLS` whose `input_schema` == OpenAI `parameters`). The system prompt is the first `role:'system'`
 message. Tool results go back as `role:'tool'` messages; the `look` tool's image can't
 ride in a `tool` message, so `toolResultToOpenAI()` appends a follow-up `role:'user'`
 message with an `image_url` data-URL part. `finish_reason` drives the loop
